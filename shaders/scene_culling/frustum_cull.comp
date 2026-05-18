@@ -1,0 +1,123 @@
+#version 450
+layout(local_size_x = 64) in;
+
+layout (push_constant) uniform PushConstants {
+    vec4 frustum_faces[6];
+    // these 2 fields never change. Maybe it's better to have them in an UBO
+    uint command_offset; 
+    uint count_offset;
+} consts;
+
+// Set 1: Compute read
+struct Index {
+    uint value;
+};
+layout(std430, set = 1, binding = 0) readonly buffer ObjectIndexBuffer {
+    Index indicesOfInterest[];
+};
+// I call it "object" because it has a model matrix field
+struct ObjectData {
+    mat4 model;
+    uint indexCount;
+    uint firstIndex;
+    int  vertexOffset;
+};
+// Uploaded in the same order as renderables
+layout(std430, set = 1, binding = 1) readonly buffer ObjectBuffer {
+    ObjectData objects[];
+};
+struct AABB {
+    vec3 min;
+    vec3 max;
+};
+layout(std430, set = 1, binding = 2) readonly buffer AABBBuffer {
+    AABB aabbs[];
+};
+
+// Set 3: Managed by framegraph
+//  binding 0 - 15:     textures
+//  binding 16 - 23:    SSBO
+//  binding 24 - 31:    storage image
+struct DrawCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+layout(std430, set = 3, binding = 16) writeonly buffer IndirectBuffer {
+    DrawCommand commands[];
+};
+struct Count {
+    uint value;
+};
+layout(std430, set = 3, binding = 17) buffer DrawCountBuffer { // atomicAdd() operation. Cant have writeonly keyword
+    Count counts[];
+};
+
+struct OBB {
+    vec4 origin;
+    vec3 x;
+    vec3 y;
+    vec3 z;
+    vec3 half_dim;
+};
+
+OBB AABB_to_OBB(AABB aabb, mat4 transform) {
+    OBB obb;
+    obb.origin = transform * vec4((aabb.min + aabb.max) * 0.5f, 1.0f);
+    mat3 transform_linear = mat3(transform);
+    obb.x = transform_linear[0]; // transform_linear * vec3(1.0f, 0.0f, 0.0f);
+    obb.y = transform_linear[1]; // transform_linear * vec3(0.0f, 1.0f, 0.0f);
+    obb.z = transform_linear[2]; // transform_linear * vec3(0.0f, 0.0f, 1.0f);
+    obb.half_dim = vec3(aabb.max - aabb.min) * 0.5f; 
+    return obb;
+}
+
+float signed_distance_to_plane(vec3 p, vec4 plane) {
+    return dot(p, plane.xyz) + plane.w;
+}
+
+float projected_radius(OBB obb, vec4 plane) {
+    vec3 n = plane.xyz;
+    return obb.half_dim.x * abs(dot(obb.x, n)) + obb.half_dim.y * abs(dot(obb.y, n)) + obb.half_dim.z * abs(dot(obb.z, n));
+}
+
+bool is_visible(uint objId) {
+    OBB obb = AABB_to_OBB(aabbs[objId], objects[objId].model);
+    
+    for (uint i = 0; i < 6; ++i) {
+        float d = signed_distance_to_plane(obb.origin.xyz, consts.frustum_faces[i]);
+        float r = projected_radius(obb, consts.frustum_faces[i]);
+        if (d > r) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void main() {
+    uint invoId = gl_GlobalInvocationID.x;
+    uint nIOI = indicesOfInterest.length();
+    if (invoId >= nIOI) {
+        return;
+    }
+    uint objId = indicesOfInterest[invoId].value;
+
+    if (!is_visible(objId)) {
+        return;
+    }
+
+    ObjectData obj = objects[objId];
+    uint cmdId = atomicAdd(counts[consts.count_offset].value, 1); // atomic counter to count visible draws
+
+    DrawCommand cmd;
+    cmd.indexCount    = obj.indexCount;
+    cmd.instanceCount = 1;
+    cmd.firstIndex    = obj.firstIndex;
+    cmd.vertexOffset  = obj.vertexOffset;
+    cmd.firstInstance = objId;  // connect to shaders
+
+    commands[cmdId + consts.command_offset] = cmd;
+}

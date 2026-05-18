@@ -1,0 +1,74 @@
+#version 450
+layout(local_size_x = 64) in;
+
+layout (push_constant) uniform PushConstants {
+	uint meshId;
+} consts;
+
+layout(std430, set = 1, binding = 0) readonly buffer PositionBuffer {
+    float positions_vec3[]; // use an array of float instead of vec3 to avoid std430 padding issues
+};
+
+struct MeshInfo {
+    uint firstVertex;
+    uint vertexCount;
+};
+
+layout(std430, set = 1, binding = 1) readonly buffer MeshInfoBuffer {
+    MeshInfo meshes[];
+};
+
+struct AABB {
+    vec3 min;
+    vec3 max;
+};
+
+layout(std430, set = 2, binding = 0) writeonly buffer AABBBuffer {
+    AABB aabbs[];
+};
+
+shared vec3 sharedMin[gl_WorkGroupSize.x];
+shared vec3 sharedMax[gl_WorkGroupSize.x];
+
+void main() {
+    uint inSliceId = gl_LocalInvocationID.x;
+    uint sliceSize = gl_WorkGroupSize.x;
+
+    MeshInfo info = meshes[consts.meshId];
+    uint vertexOffset = info.firstVertex;
+    uint vertexCount = info.vertexCount;
+
+    // stride through the vertex buffer
+    vec3 localMin = vec3(3.4e38);
+    vec3 localMax = vec3(-3.4e38);
+
+    for (uint i = inSliceId; i < vertexCount; i += sliceSize) {
+        uint xId = (vertexOffset + i) * 3u;
+        float x = positions_vec3[xId];
+        float y = positions_vec3[xId + 1];
+        float z = positions_vec3[xId + 2];
+        vec3 v = vec3(x, y, z);
+        localMin = min(localMin, v);
+        localMax = max(localMax, v);
+    }
+
+    sharedMin[inSliceId] = localMin;
+    sharedMax[inSliceId] = localMax;
+
+    barrier(); // Make sure all threads wrote their values
+
+    // Parallel reduction (min/max) in shared memory
+    for (uint offset = sliceSize / 2u; offset > 0u; offset /= 2u) {
+        if (inSliceId < offset) {
+            sharedMin[inSliceId] = min(sharedMin[inSliceId], sharedMin[inSliceId + offset]);
+            sharedMax[inSliceId] = max(sharedMax[inSliceId], sharedMax[inSliceId + offset]);
+        }
+        barrier();
+    }
+
+    // Only thread 0 writes the result
+    if (inSliceId == 0u) {
+        aabbs[consts.meshId].min = sharedMin[0];
+        aabbs[consts.meshId].max = sharedMax[0];
+    }
+}
