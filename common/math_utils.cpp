@@ -181,3 +181,30 @@ std::vector<CSMUtils::CascadeContext> CSMUtils::csm_ortho_projections(
 	}
 	return cascade_ctxs;
 }
+
+glm::vec4 encode_proj(const glm::mat4& proj) {
+	float a = proj[0][0];
+	float b = -proj[1][1];
+	float c = proj[3][2];
+	float d = c / proj[2][2];
+	return { a, b, c, d };
+}
+
+glm::mat4 encoded_persp_proj_inv(glm::vec4 enc) {
+	glm::mat4 inv(0.0f);
+	inv[0][0] = 1.0 / enc.x;
+	inv[1][1] = -1.0 / enc.y;
+	inv[2][3] = 1.0 / enc.z;
+	inv[3][2] = -1.0;
+	inv[3][3] = 1.0 / enc.w;
+	return inv;
+}
+
+glm::mat4 encoded_ortho_proj_inv(glm::vec4 enc) {
+	glm::mat4 inv(0.0f);
+	inv[0][0] = 1.0 / enc.x;
+	inv[1][1] = -1.0 / enc.y;
+	inv[2][2] = enc.w / enc.z;
+	inv[3][2] = -enc.w;
+	return inv;
+}

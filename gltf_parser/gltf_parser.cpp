@@ -7,6 +7,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "tiny_gltf.h"
 #include "gltf_traits.h"
+#include "polygon_boundary.hpp"
 
 #include <iostream>
 
@@ -257,6 +258,14 @@ static bool load_material(int material_id, MaterialHandle& mh) {
 	m.roughness_factor = gltf_material.pbrMetallicRoughness.roughnessFactor;
 	m.normal_scale = gltf_material.normalTexture.scale;
 	m.occlusion_strength = gltf_material.occlusionTexture.strength;
+	m.emissive_factor[0] = gltf_material.emissiveFactor[0];
+	m.emissive_factor[1] = gltf_material.emissiveFactor[1];
+	m.emissive_factor[2] = gltf_material.emissiveFactor[2];
+	auto iter = gltf_material.extensions.find("KHR_materials_emissive_strength");
+	if (iter != gltf_material.extensions.end() && iter->second.Has("emissiveStrength")) {
+		m.emissive_strength = (float)iter->second.Get("emissiveStrength").GetNumberAsDouble();
+	}
+
 	if (gltf_material.alphaMode == "OPAQUE") {
 		m.alpha_mode = MaterialMeta::AlphaMode::Opaque;
 	}
@@ -407,7 +416,9 @@ static glm::mat4 parse_matrix(const tg::Node& node) {
 	glm::vec3 s(1.0f);
 
 	if (!node.translation.empty()) {
-		std::memcpy(&t, node.translation.data(), sizeof(t));
+		t.x = node.translation[0];
+		t.y = node.translation[1];
+		t.z = node.translation[2];
 	}
 
 	if (!node.rotation.empty()) {
@@ -430,6 +441,269 @@ static glm::mat4 parse_matrix(const tg::Node& node) {
 	return T * R * S;
 }
 
+static bool load_punctual_light(int light_id, LightHandle& lh) {
+	auto ext_it = model.extensions.find("KHR_lights_punctual");
+	if (ext_it == model.extensions.end()) {
+		std::cout << "extension KHR_lights_punctual doesnt exist" << std::endl;
+		assert(false);
+		return false;
+	}
+
+	const tinygltf::Value& ext = ext_it->second;
+	if (!ext.Has("lights")) {
+		std::cout << "no light array in extension KHR_lights_punctual" << std::endl;
+		assert(false);
+		return false;
+	}
+
+	const tinygltf::Value& light_arr = ext.Get("lights");
+	if (light_id >= light_arr.ArrayLen()) {
+		std::cout << "invalid punctual light_id = " << light_id << std::endl;
+		assert(false);
+		return false;
+	}
+	
+	const tinygltf::Value& gltf_light = light_arr.Get(light_id);
+	LightMeta lm;
+
+	if (gltf_light.Has("type")) {
+		std::string type_str = gltf_light.Get("type").Get<std::string>();
+		if (type_str == "directional") {
+			lm.type = LightMeta::Type::Directional;
+		}
+		else if (type_str == "point") {
+			lm.type = LightMeta::Type::Point;
+		}
+		else {
+			std::cout << "unrecognized punctual light type = " << type_str << std::endl;
+			assert(false);
+			return false;
+		}
+	}
+	if (gltf_light.Has("color")) {
+		const auto& c = gltf_light.Get("color");
+		lm.color = glm::vec3(
+			static_cast<float>(c.Get(0).GetNumberAsDouble()),
+			static_cast<float>(c.Get(1).GetNumberAsDouble()),
+			static_cast<float>(c.Get(2).GetNumberAsDouble())
+		);
+	}
+	if (gltf_light.Has("intensity")) {
+		lm.intensity = static_cast<float>(gltf_light.Get("intensity").GetNumberAsDouble());
+	}
+
+	lm.center = glm::vec3(0.0f);
+	lm.direction = glm::vec3(0.0f, 0.0f, -1.0f); // Blender gLTF exporter convention https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_lights_punctual/README.md#adding-light-instances-to-nodes
+	if (lm.type == LightMeta::Type::Directional) {
+		lm.influence_radius = std::numeric_limits<float>::max();
+	}
+	else {
+		if(!gltf_light.Has("range")) {
+			std::cout << "punctual light influence range unspecified. Take 1.0f by default. light_id = " << light_id << std::endl;
+			assert(false);
+			lm.influence_radius = 1.0f;
+		}
+		else {
+			lm.influence_radius = static_cast<float>(gltf_light.Get("range").GetNumberAsDouble());
+		}
+	}
+
+	lh = g_scene_mngr->add_light(lm);
+	return true;
+}
+
+static bool load_area_light(int light_id, LightHandle& lh) {
+	auto ext_it = model.extensions.find("EXT_lights_area");
+	if (ext_it == model.extensions.end()) {
+		std::cout << "extension EXT_lights_area doesnt exist" << std::endl;
+		assert(false);
+		return false;
+	}
+
+	const tinygltf::Value& ext = ext_it->second;
+	if (!ext.Has("lights")) {
+		std::cout << "no light array in extension EXT_lights_area" << std::endl;
+		assert(false);
+		return false;
+	}
+
+	const tinygltf::Value& light_arr = ext.Get("lights");
+	if (light_id >= light_arr.ArrayLen()) {
+		std::cout << "invalid area light_id = " << light_id << std::endl;
+		assert(false);
+		return false;
+	}
+
+	const tinygltf::Value& gltf_light = light_arr.Get(light_id);
+	LightMeta lm;
+
+	if (gltf_light.Has("type")) {
+		std::string type_str = gltf_light.Get("type").Get<std::string>();
+		if (type_str == "rect") {
+			lm.type = LightMeta::Type::Area;
+		}
+		else if (type_str == "square") {
+			lm.type = LightMeta::Type::Area;
+		}
+		else {
+			std::cout << "unrecognized area light type = " << type_str << std::endl;
+			assert(false);
+			return false;
+		}
+	}
+	if (gltf_light.Has("color")) {
+		const auto& c = gltf_light.Get("color");
+		lm.color = glm::vec3(
+			static_cast<float>(c.Get(0).GetNumberAsDouble()),
+			static_cast<float>(c.Get(1).GetNumberAsDouble()),
+			static_cast<float>(c.Get(2).GetNumberAsDouble())
+		);
+	}
+	if (gltf_light.Has("intensity")) {
+		lm.intensity = static_cast<float>(gltf_light.Get("intensity").GetNumberAsDouble());
+	}
+
+	lm.center = glm::vec3(0.0f);
+	lm.direction = glm::vec3(0.0f, 0.0f, -1.0f); // Blender gLTF exporter convention https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_lights_punctual/README.md#adding-light-instances-to-nodes
+	if (!gltf_light.Has("range")) {
+		std::cout << "area light influence range unspecified. Take 1.0f by default. light_id = " << light_id << std::endl;
+		lm.influence_radius = 1.0f;
+	}
+	else {
+		lm.influence_radius = static_cast<float>(gltf_light.Get("range").GetNumberAsDouble());
+	}
+
+	lm.plane_base[0] = glm::vec3(1.0f, 0.0f, 0.0f); // exporter convention
+	lm.plane_base[1] = glm::vec3(0.0f, 1.0f, 0.0f);
+	if (gltf_light.Has("width")) {
+		lm.half_dims[0] = static_cast<float>(gltf_light.Get("width").GetNumberAsDouble()) * 0.5f;
+	}
+	if (gltf_light.Has("height")) {
+		lm.half_dims[1] = static_cast<float>(gltf_light.Get("height").GetNumberAsDouble()) * 0.5f;
+	}
+	
+	lh = g_scene_mngr->add_light(lm);
+	return true;
+}
+
+static bool try_load_light(const tg::Node& node, LightHandle& lh) {
+	// check for punctual lights
+	auto p_light_iter = node.extensions.find("KHR_lights_punctual");
+	if (p_light_iter != node.extensions.end() && p_light_iter->second.Has("light")) {
+		if (node.mesh != -1) {
+			std::cout << "punctual light node cannot have a mesh" << std::endl;
+			assert(false);
+			return false;
+		}
+		if (!load_punctual_light(p_light_iter->second.Get("light").Get<int>(), lh)) {
+			std::cout << "error loading punctual light" << std::endl;
+			assert(false);
+			return false;
+		}
+	}
+
+	// check for area lights
+	auto a_light_iter = node.extensions.find("EXT_lights_area");
+	if (a_light_iter != node.extensions.end() && a_light_iter->second.Has("light")) {
+		if (node.mesh != -1) {
+			std::cout << "area light node cannot have a mesh" << std::endl;
+			assert(false);
+			return false;
+		}
+		if (!load_area_light(a_light_iter->second.Get("light").Get<int>(), lh)) {
+			std::cout << "error loading area light" << std::endl;
+			assert(false);
+			return false;
+		}
+	}
+
+	if (lh.id != INVALID_MANAGER_HANDLE_ID) {
+		g_scene_mngr->_light_metas.at(lh.id).name = node.name;
+	}
+
+	// this node has no light. Still valid. Return true;
+	return true;
+}
+
+static std::vector<glm::vec3> polygon_boundary(MeshHandle mh, float colinear_threshould = 1E-4f) {
+	MeshMeta mm = g_mesh_mngr->_mesh_metas.at(mh.id);
+	BufferHandle pos_bf = g_mesh_mngr->_vb_metas.at(mm.vb.id).position;
+	BufferMeta pos_bm = g_mesh_mngr->_buf_metas.at(pos_bf.id);
+	BufferHandle indices_bf = mm.ib;
+	BufferMeta indices_bm = g_mesh_mngr->_buf_metas.at(indices_bf.id);
+	// check if index is of uint16_t type
+	assert(indices_bm.comp_type == BufferMeta::ComponentType::UInt16);
+	assert(indices_bm.comp_per_ele == 1);
+	std::vector<uint8_t>& indices_raw = g_mesh_mngr->_buf_contents.at(indices_bf.id);
+	std::vector<uint16_t> boundary_indices = PolygonBoundaryExtractor::extract(indices_raw.data(), indices_bm.ele_count);
+	// check if position is of vec3 type
+	assert(pos_bm.comp_type == BufferMeta::ComponentType::Float);
+	assert(pos_bm.comp_per_ele == 3);
+	std::vector<uint8_t>& pos_raw = g_mesh_mngr->_buf_contents.at(pos_bf.id);
+	std::vector<glm::vec3> boundary_verts;
+	for (uint16_t i : boundary_indices) {
+		uint32_t start = i * sizeof(glm::vec3);
+		boundary_verts.push_back(glm::vec3(
+			*(float*)&pos_raw.at(start),
+			*(float*)&pos_raw.at(start + sizeof(float)),
+			*(float*)&pos_raw.at(start + sizeof(float) * 2)
+		));
+	}
+	std::vector<glm::vec3> boundary_verts_clean = std::move(PolygonBoundaryExtractor::remove_collinear_vertices(boundary_verts));
+	return boundary_verts_clean;
+}
+
+//static bool load_area_light(RenderableHandle rh, LightHandle& lh) {
+//	RenderableMeta rm = g_scene_mngr->_renderable_metas.at(rh.id);
+//	MaterialMeta mm = g_mat_mngr->_mat_metas.at(rm.mat.id);
+//	LightMeta lm;
+//	std::vector<glm::vec3> boundary = std::move(polygon_boundary(rm.mesh));
+//	if (!PolygonBoundaryExtractor::is_planar_rectangle(boundary)) {
+//		std::cout << "area light boundary vertices do not consititute a planar rectangle" << std::endl;
+//		assert(false);
+//		return false;
+//	}
+//	
+//	/*
+//	* a -- d
+//	* |    |
+//	* b -- c
+//	*/
+//	glm::vec3 a = boundary[0];
+//	glm::vec3 b = boundary[1];
+//	glm::vec3 c = boundary[2];
+//	glm::vec3 d = boundary[3];
+//
+//	lm.type = LightMeta::Type::Area;
+//	lm.color = mm.emissive_factor;
+//	lm.intensity = mm.emissive_strength;
+//	lm.center = (a + b + c + d) / 4.0f;
+//	lm.direction = glm::normalize(glm::cross(c - a, d - b));
+//	lm.radius = ;
+//	lm.plane_base = glm::mat2x3(glm::normalize(b - a), glm::normalize(d - a));
+//	lm.half_len = glm::vec2((b - a) / 2.0f, (d - a) / 2.0f);
+//	lh = g_scene_mngr->add_light(lm);
+//}
+
+// check for area light
+//bool should_use_node_as_area_light(const tinygltf::Node& node)
+//{
+//	if (!node.extras.IsObject()) {
+//		return false;
+//	}
+//
+//	const auto& extras = node.extras.Get<tinygltf::Value::Object>();
+//
+//	auto it = extras.find("useAsLight");
+//	if (it == extras.end())
+//		return false;
+//
+//	if (!it->second.IsBool())
+//		return false;
+//
+//	return it->second.Get<bool>();
+//}
+
 static bool load_node(int node_id, SceneNodeHandle parent_snh) {
 	const tg::Node& node = model.nodes.at(node_id);
 
@@ -449,6 +723,14 @@ static bool load_node(int node_id, SceneNodeHandle parent_snh) {
 			}
 		}
 	}
+
+	// load light
+	if (!try_load_light(node, snm.light)) {
+		std::cout << "error loading light. node_id = " << node_id << std::endl;
+		assert(false);
+		return false;
+	}
+
 	SceneNodeHandle snh = g_scene_mngr->add_scene_node(snm);
 
 	// recursively parse children

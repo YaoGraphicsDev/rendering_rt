@@ -21,7 +21,7 @@ ShadowMapping::ShadowMapping(const PassConfig& cfg) {
 			.depth_stencil_attachment_format(cfg.depth_attachment_format)
 		.end()
 		.shader_vertex(_shader_blob["shadow_mapping.vert"])
-		.cull_back_face(VK_FRONT_FACE_CLOCKWISE)
+		.cull_back_face()
 		.depth_test()
 		.vertex_state(_res->mesh_mgr->_vb->builder)
 		.add_dynamic_state(VK_DYNAMIC_STATE_VIEWPORT)
@@ -29,9 +29,12 @@ ShadowMapping::ShadowMapping(const PassConfig& cfg) {
 		.build();
 
 	_desc_pool.reset(new NaiveExpandableDescriptorPool);
-	_obj_desc_set = _desc_pool->allocate(_pipeline->desc_set_layouts[DescriptorSetRate::PerObject]);
-	std::shared_ptr<StaticUBOArray> ubo_arr = _res->scene_mgr->_renderable_ubos;
-	_obj_desc_set->bind_buffer_array(0, ubo_arr->_buf, 0, ubo_arr->_stride, ubo_arr->_n_ubos);
+	_obj_desc_sets.resize(_res->scene_mgr->_per_frame_bos.size());
+	for (uint32_t f = 0; f < _obj_desc_sets.size(); ++f) {
+		_obj_desc_sets[f] = _desc_pool->allocate(_pipeline->desc_set_layouts[DescriptorSetRate::PerObject]);
+		auto model_arr = _res->scene_mgr->_per_frame_bos[f].model_mats;
+		_obj_desc_sets[f]->bind_buffer_array(0, model_arr->_buf, 0, model_arr->_stride, model_arr->_n_ubos);
+	}
 }
 
 ShadowMapping::~ShadowMapping() {
@@ -46,18 +49,16 @@ void ShadowMapping::commands(CommandContext& ctx) {
 	ctx.cmd_buf->cmd_bind_vertex_buffer(_res->mesh_mgr->_vb);
 	ctx.cmd_buf->cmd_bind_index_buffer(_res->mesh_mgr->_ib, VK_INDEX_TYPE_UINT16);
 
-	ctx.cmd_buf->cmd_bind_descriptor_set(_pipeline, _obj_desc_set, DescriptorSetRate::PerObject);
+	ctx.cmd_buf->cmd_bind_descriptor_set(_pipeline, _obj_desc_sets[ctx.fg_frame_id], DescriptorSetRate::PerObject);
 
 	glm::mat4 project_view = ctx.light_proj * ctx.light_view;
 	ctx.cmd_buf->cmd_push_constant(_pipeline, "projectView", &project_view);
 
 	ctx.cmd_buf->cmd_bind_graphics_pipeline(_pipeline);
-	Std430AlignmentType::Range command_range = ctx.indirect_cmd_layout.range_of(0, SSBOAccess());
-	// ctx.cmd_buf->cmd_draw_indexed_indirect(ctx.fg_indirect_cmd, 0, _res->render_queue->_order.size(), command_range.stride);
 	ctx.cmd_buf->cmd_draw_indexed_indirect_count(
 		ctx.fg_indirect_cmd,
 		0, ctx.fg_indirect_count,
 		0,
 		_res->render_queue->_order.size(),
-		command_range.stride);
+		ctx.indirect_cmd_stride);
 }

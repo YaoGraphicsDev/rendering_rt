@@ -10,6 +10,8 @@
 #include "otcv_utils.h"
 #include "manager_handles.h"
 
+#include "glsl_reflect/geometry_pass/geometry.frag.hpp"
+
 // sampler
 struct SamplerMeta {
 	enum class Filter {
@@ -64,8 +66,14 @@ struct MaterialMeta {
 	float roughness_factor = 1.0f;
 	float normal_scale = 1.0f;
 	float occlusion_strength = 0.0f;
+	glm::vec3 emissive_factor;
+	float emissive_strength = 1.0f; // values of elements can exceed 1.0
+	/* skip lighting calculations.One use case is for area light sources, where the material is emissive but unlit.
+	* dont use this on mixed material.
+	*/
+	bool unlit = false;
 
-	enum class AlphaMode {
+	enum class AlphaMode : uint32_t {
 		Opaque = 0,
 		Mask,
 		Blend
@@ -129,7 +137,7 @@ public:
 	// GPU objects
 	std::vector<otcv::Image*>								_imgs;
 	std::vector<otcv::Sampler*>								_samps;
-	std::shared_ptr<otcv::StaticUBOArray>							_mat_ubos = nullptr;
+	std::shared_ptr<otcv::StaticUBOArray<GeometryFrag::MaterialUBO>>							_mat_ubos = nullptr;
 
 
 	// pack(channels, bit_depth) | color_space, VkFormat

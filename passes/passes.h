@@ -4,3 +4,4 @@
 #include "lighting.h"
 #include "post_processing.h"
 #include "shadow_mapping.h"
+#include "light_clustering.h"

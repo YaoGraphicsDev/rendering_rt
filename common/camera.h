@@ -1,7 +1,10 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <iostream>
+
+#include "math_utils.h"
 
 struct PerspectiveCamera {
 	PerspectiveCamera() {};
@@ -22,19 +25,24 @@ struct PerspectiveCamera {
 		this->far = far;
 		this->fov = fov;
 		this->aspect = aspect;
-		this->view = update_view();
-		this->proj = update_proj();
+		update_view();
+		update_proj();
 	}
 
-	glm::mat4 update_view() {
+	void update_view() {
 		view = glm::lookAtRH(eye, center, up);
-		return view;
+		view_base_quat = glm::quat_cast(glm::transpose(glm::mat3(view)));
+		// Could have just been a inverse() call, but do it this way to minimize numerical error, since view_base_quat is what's being passed to shaders
+		view_inv = glm::mat4(1.0f);
+		view_inv = glm::mat3_cast(view_base_quat);
+		view_inv[3] = glm::vec4(eye, 1.0f);
 	}
 
-	glm::mat4 update_proj() {
+	void update_proj() {
 		proj = glm::perspectiveRH_ZO(fov, aspect, near, far);
 		proj[1][1] *= -1.0f;
-		return proj;
+		proj_enc = encode_proj(proj);
+		proj_inv = encoded_persp_proj_inv(proj_enc);
 	}
 
 	glm::vec3 eye;
@@ -46,6 +54,11 @@ struct PerspectiveCamera {
 	float aspect;
 	glm::mat4 view;
 	glm::mat4 proj;
+	glm::mat4 view_inv;
+	glm::mat4 proj_inv;
+
+	glm::vec4 proj_enc;
+	glm::quat view_base_quat;
 	
 	//friend std::ostream & operator<<(std::ostream & os, const glm::vec3 & v) {
 	//	os << v.x << ", " << v.y << ", " << v.z;

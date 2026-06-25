@@ -1,6 +1,6 @@
 #pragma once
 
-#include "resource_managers/scene_manager.hpp"
+#include "resource_managers/resource_context.h"
 
 #include <string>
 

@@ -1,0 +1,131 @@
+#version 450
+layout(local_size_x = 64) in;
+
+layout (push_constant) uniform PushConstants {
+	uint nClusters;
+    mat4 view;
+} consts;
+
+struct AABB {
+	vec3 min;
+    vec3 max;
+};
+layout(std430, set = 1, binding = 0) readonly buffer ClusterAABBBuffer {
+    AABB clusterAABBs[];
+};
+
+const uint LIGHT_TYPE_POINT = 0;
+const uint LIGHT_TYPE_DIR   = 1;
+const uint LIGHT_TYPE_AREA  = 2;
+struct Light {
+    uint type; // 0 -- point, 1 -- directional, 2 -- area
+    float intensity;
+    vec3 color;
+    vec3 center; // in world space
+
+    // Doesnt guarantee right-handedness between direction and plane bases
+    vec3 direction;     // world space
+    // area light exclusive
+    vec3 planeBasisX;   // world space
+    vec3 planeBasisY;   // world space
+    vec2 halfDims;      // (half width, half height)
+
+    float influenceDistance; // bounding sphere radius
+};
+layout(std430, set = 1, binding = 1) readonly buffer LightBuffer {
+    Light lights[];
+};
+
+// Set 3: Managed by framegraph
+//  binding 0 - 15:     textures
+//  binding 16 - 23:    SSBO
+//  binding 24 - 31:    storage image
+struct Count {
+    uint value;
+};
+layout(std430, set = 3, binding = 16) readonly buffer VisibleLightIdBuffer {
+    Count visibleLightIds[];
+};
+layout(std430, set = 3, binding = 17) readonly buffer VisibleLightCountBuffer { // atomicAdd() operation. Cant have writeonly keyword
+    Count visibleLightIdCount[]; // only one element
+};
+#define MAX_LIGHT_PER_CLUSTER 32
+struct LightAssignment {
+    uint nLights;
+    uint lightIds[MAX_LIGHT_PER_CLUSTER];
+};
+layout(std430, set = 3, binding = 18) writeonly buffer LightAssignmentBuffer {
+    LightAssignment assignments[];
+};       
+
+bool sphereIntersectsAABB(vec3 center, float radius, vec3 aabbMin, vec3 aabbMax) {
+    // Find the closest point on the AABB to the sphere center
+    vec3 closestPoint = clamp(center, aabbMin, aabbMax);
+
+    vec3 delta = closestPoint - center;
+    float distSq = dot(delta, delta);
+
+    return distSq <= radius * radius;
+}
+
+bool hemiSphereIntersectsAABB(vec3 center, float radius, vec3 dir, vec3 aabbMin, vec3 aabbMax) {
+    // 1. Test against full sphere.
+    vec3 closestPoint = clamp(center, aabbMin, aabbMax);
+    vec3 delta = closestPoint - center;
+
+    if (dot(delta, delta) > radius * radius)
+        return false;
+
+    // 2. Test whether AABB has any point in front of hemisphere plane.
+    vec3 positiveVertex = vec3(
+        dir.x >= 0.0 ? aabbMax.x : aabbMin.x,
+        dir.y >= 0.0 ? aabbMax.y : aabbMin.y,
+        dir.z >= 0.0 ? aabbMax.z : aabbMin.z
+    );
+
+    if (dot(positiveVertex - center, dir) < 0.0)
+        return false;
+
+    return true;
+}
+
+void main() {
+    uint clusterId = gl_GlobalInvocationID.x;
+    if (clusterId >= consts.nClusters) {
+        return;
+    }
+
+    uint nLights = 0;
+    for (uint i = 0; i < visibleLightIdCount[0].value; ++i) {
+        if (nLights == MAX_LIGHT_PER_CLUSTER) { // simply reject lights that exceed limit
+            break;
+        }
+
+        uint lightId = visibleLightIds[i].value;
+        vec3 viewSpaceSphereCenter = (consts.view * vec4(lights[lightId].center, 1.0f)).xyz;
+        vec3 aabbMin = clusterAABBs[clusterId].min;
+        vec3 aabbMax = clusterAABBs[clusterId].max;
+
+        if (lights[lightId].type == LIGHT_TYPE_AREA) {
+            // hemispherical check for area light
+            vec3 viewSpaceHemiDir = (consts.view * vec4(lights[lightId].direction, 0.0f)).xyz;
+            if (hemiSphereIntersectsAABB(viewSpaceSphereCenter, lights[lightId].influenceDistance, viewSpaceHemiDir, aabbMin, aabbMax)) {
+                assignments[clusterId].lightIds[nLights] = lightId;
+                nLights += 1;
+            }
+        } else if (lights[lightId].type == LIGHT_TYPE_POINT) {
+            // spherical check for point light
+            if (sphereIntersectsAABB(viewSpaceSphereCenter, lights[lightId].influenceDistance, aabbMin, aabbMax)) {
+                assignments[clusterId].lightIds[nLights] = lightId;
+                nLights += 1;
+            }
+        } else if (lights[lightId].type == LIGHT_TYPE_DIR) {
+            assignments[clusterId].lightIds[nLights] = lightId;
+            nLights += 1;
+        } else {
+            // reserved for spotlight
+        }
+
+    }
+    assignments[clusterId].nLights = nLights;
+}

@@ -29,4 +29,7 @@ struct SceneNodeHandle {
 struct RenderableHandle {
 	int id = -1;
 };
+struct LightHandle {
+	int id = -1;
+};
 const int INVALID_MANAGER_HANDLE_ID = -1;

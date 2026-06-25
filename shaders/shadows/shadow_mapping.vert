@@ -7,13 +7,12 @@ layout (push_constant) uniform PushConstants {
 	mat4 projectView;
 } consts;
 
-layout(set = 1, binding = 0) uniform ObjectUBO {
+layout(set = 1, binding = 0) uniform ModelMatUBO {
     mat4 model;
-    int matId;
-} oUbos[];
+} mmUbos[];
 
 void main() {
 	uint objId = gl_BaseInstance;
-	mat4 objModelMat = oUbos[nonuniformEXT(objId)].model;
+	mat4 objModelMat = mmUbos[objId].model;
 	gl_Position = consts.projectView * objModelMat * vec4(inPosition, 1.0f);
 }

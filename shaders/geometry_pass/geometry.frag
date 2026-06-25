@@ -10,30 +10,38 @@ layout(location = 3) flat in int inMaterialId;
 layout(location = 0) out vec4 outAlbedo;
 layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outMetallicRoughness;
+layout(location = 3) out vec4 outEmissive;
+layout(location = 4) out uint outMatFlags;
 
+#define ALPHA_MODE_OPQAUE	0
+#define ALPHA_MODE_MASK		1
 struct MaterialCfg {
 	vec4 baseColorFactor;
 	vec4 mrnoFactor; // 4 factors: metallic - roughness - normal scale - occlusion strength
+	vec3 emissiveColorStrength; // rgb color * strength
 	uint alphaMode; // 0 - opaque, 1 - mask, 2 - blend
 	float alphaCutoff;
 	uint flipNormal; // 0 - dont need to flip, 1 - need to flip
+	uint unlit; // 0 -- lit, 1 -- unlit
 };
 
 struct TextureIds {
     int baseColorId;
     int normalId;
     int metallicRoughnessId;
+	int emissiveId;
 };
 
 struct SamplerIds {
 	int baseColorId;
 	int normalId;
 	int metallicRoughnessId;
+	int emissiveId;
 };
 
 layout(set = 2, binding = 0) uniform MaterialUBO {
-    MaterialCfg cfg;
-    TextureIds texIds;
+    MaterialCfg materialCfg;
+    TextureIds textureIds;
 	SamplerIds samplerIds;
 } mUbos[];
 
@@ -46,20 +54,20 @@ void main() {
 		discard;
 	}
 
-    MaterialCfg cfg = mUbos[nonuniformEXT(inMaterialId)].cfg;
-    TextureIds texIds = mUbos[nonuniformEXT(inMaterialId)].texIds;
-	SamplerIds samplerIds = mUbos[nonuniformEXT(inMaterialId)].samplerIds;
+    MaterialCfg cfg = mUbos[inMaterialId].materialCfg;
+    TextureIds texIds = mUbos[inMaterialId].textureIds;
+	SamplerIds samplerIds = mUbos[inMaterialId].samplerIds;
 
     vec4 albedo = vec4(1.0f);
     if (texIds.baseColorId >= 0 && samplerIds.baseColorId >= 0) {
 		// vec4 color = texture(sampler2D(u_textures[i], u_sampler), uv);
         albedo = texture(sampler2D(
-			textures[nonuniformEXT(texIds.baseColorId)],
-			samplers[nonuniformEXT(samplerIds.baseColorId)]),
+			textures[texIds.baseColorId],
+			samplers[samplerIds.baseColorId]),
 			inUV);
     }
 	albedo = albedo * cfg.baseColorFactor;
-	if (cfg.alphaMode == 1 && albedo.w < cfg.alphaCutoff) {
+	if (cfg.alphaMode == ALPHA_MODE_MASK && albedo.w < cfg.alphaCutoff) {
 		discard;
 	}
 	outAlbedo = albedo;
@@ -75,8 +83,8 @@ void main() {
 	    vec3 b = cross(n, t) * inWorldTangent.w;
 	    mat3 tbn = mat3(t, b, n);
 	    vec3 tbnCoord = texture(sampler2D(
-			textures[nonuniformEXT(texIds.normalId)],
-			samplers[nonuniformEXT(samplerIds.normalId)]),
+			textures[texIds.normalId],
+			samplers[samplerIds.normalId]),
 			inUV).xyz * 2.0 - 1.0;
 	    tbnCoord.xy *= vec2(normalScale);
 	    tbnCoord = normalize(tbnCoord);
@@ -91,10 +99,21 @@ void main() {
 
     if (texIds.metallicRoughnessId >= 0 && samplerIds.metallicRoughnessId >= 0) {
 	    outMetallicRoughness = texture(sampler2D(
-			textures[nonuniformEXT(texIds.metallicRoughnessId)],
-			samplers[nonuniformEXT(samplerIds.metallicRoughnessId)]),
-			inUV) * vec4(metallicFactor, roughnessFactor, 0.0f, 0.0f);
+			textures[texIds.metallicRoughnessId],
+			samplers[samplerIds.metallicRoughnessId]),
+			inUV) * vec4(metallicFactor, roughnessFactor, 0.0f, 1.0f);
     } else {
-		outMetallicRoughness = vec4(metallicFactor, roughnessFactor, 0.0f, 0.0f);
+		outMetallicRoughness = vec4(metallicFactor, roughnessFactor, 0.0f, 1.0f);
     }
+
+	if (texIds.emissiveId >= 0 && samplerIds.emissiveId >= 0) {
+		outEmissive = texture(sampler2D(
+			textures[texIds.emissiveId],
+			samplers[samplerIds.emissiveId]),
+			inUV) * vec4(cfg.emissiveColorStrength.xyz, 1.0f);
+	} else {
+		outEmissive = vec4(cfg.emissiveColorStrength.xyz, 1.0f);
+	}
+
+	outMatFlags = cfg.unlit;
 }

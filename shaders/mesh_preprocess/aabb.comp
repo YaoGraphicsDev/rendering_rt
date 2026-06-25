@@ -6,7 +6,7 @@ layout (push_constant) uniform PushConstants {
 } consts;
 
 layout(std430, set = 1, binding = 0) readonly buffer PositionBuffer {
-    float positions_vec3[]; // use an array of float instead of vec3 to avoid std430 padding issues
+    float positionsVec3[]; // use an array of float instead of vec3 to avoid std430 padding issues
 };
 
 struct MeshInfo {
@@ -44,9 +44,9 @@ void main() {
 
     for (uint i = inSliceId; i < vertexCount; i += sliceSize) {
         uint xId = (vertexOffset + i) * 3u;
-        float x = positions_vec3[xId];
-        float y = positions_vec3[xId + 1];
-        float z = positions_vec3[xId + 2];
+        float x = positionsVec3[xId];
+        float y = positionsVec3[xId + 1];
+        float z = positionsVec3[xId + 2];
         vec3 v = vec3(x, y, z);
         localMin = min(localMin, v);
         localMax = max(localMax, v);

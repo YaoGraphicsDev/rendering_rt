@@ -37,7 +37,7 @@ void MaterialManager::bindless_build() {
 	VkPhysicalDeviceProperties device_properties;
 	vkGetPhysicalDeviceProperties(otcv::get_context().physical_device->vk_physical_device, &device_properties);
 	VkPhysicalDeviceLimits limits = device_properties.limits;
-	VkDeviceSize ubo_alignment = limits.minUniformBufferOffsetAlignment;
+	// VkDeviceSize ubo_alignment = limits.minUniformBufferOffsetAlignment;
 	if (limits.maxPerStageDescriptorSampledImages < _img_metas.size()) {
 		assert(false);
 		std::cout << "MaterialManager::bindless_build() error: number of images = " << _img_metas.size() <<
@@ -53,72 +53,73 @@ void MaterialManager::bindless_build() {
 
 
 	// binding 0 -- material ubos
-	Std140AlignmentType MaterialCfg;
-	using Type = Std140AlignmentType::InlineType;
-	MaterialCfg.add(Type::Vec4, "baseColorFactor");
-	MaterialCfg.add(Type::Vec4, "mrnoFactor");
-	MaterialCfg.add(Type::Uint, "alphaMode");
-	MaterialCfg.add(Type::Float, "alphaCutoff");
-	MaterialCfg.add(Type::Uint, "flipNormal");
-	Std140AlignmentType TextureIds;
-	TextureIds.add(Type::Int, "baseColorId");
-	TextureIds.add(Type::Int, "normalId");
-	TextureIds.add(Type::Int, "metallicRoughnessId");
-	Std140AlignmentType SamplerIds;
-	SamplerIds.add(Type::Int, "baseColorId");
-	SamplerIds.add(Type::Int, "normalId");
-	SamplerIds.add(Type::Int, "metallicRoughnessId");
-	Std140AlignmentType MaterialUBO;
-	MaterialUBO.add(MaterialCfg, "cfg");
-	MaterialUBO.add(TextureIds, "texIds");
-	MaterialUBO.add(SamplerIds, "samplerIds");
-	_mat_ubos.reset(new StaticUBOArray(MaterialUBO, _mat_metas.size(), ubo_alignment));
+	_mat_ubos.reset(new StaticUBOArray<GeometryFrag::MaterialUBO>(_mat_metas.size()));
 
 	// upload material data to ubo
 	for (uint32_t id = 0; id < _mat_metas.size(); ++id) {
 		MaterialMeta& mat_meta = _mat_metas[id];
-		_mat_ubos->set(id, StaticUBOAccess()["cfg"]["baseColorFactor"], &mat_meta.base_color_factor);
-		glm::vec4 mrno_factor(mat_meta.metallic_factor, mat_meta.roughness_factor, mat_meta.normal_scale, mat_meta.occlusion_strength);
-		_mat_ubos->set(id, StaticUBOAccess()["cfg"]["mrnoFactor"], &mrno_factor);
-		_mat_ubos->set(id, StaticUBOAccess()["cfg"]["alphaMode"], &mat_meta.alpha_mode);
-		_mat_ubos->set(id, StaticUBOAccess()["cfg"]["alphaCutoff"], &mat_meta.alpha_cutoff);
-		uint32_t flip_normal = mat_meta.double_sided ? 1 : 0;
-		_mat_ubos->set(id, StaticUBOAccess()["cfg"]["flipNormal"], &flip_normal);
+
+		GeometryFrag::MaterialUBO mat_ubo;
+		GeometryFrag::MaterialCfg& mat_cfg = mat_ubo.materialCfg;
+		mat_cfg.baseColorFactor = vec4_to_array(mat_meta.base_color_factor);
+		mat_cfg.mrnoFactor[0] = mat_meta.metallic_factor;
+		mat_cfg.mrnoFactor[1] = mat_meta.roughness_factor;
+		mat_cfg.mrnoFactor[2] = mat_meta.normal_scale;
+		mat_cfg.mrnoFactor[3] = mat_meta.occlusion_strength;
+		mat_cfg.emissiveColorStrength = vec3_to_array(mat_meta.emissive_factor * mat_meta.emissive_strength);
+		mat_cfg.alphaMode = (uint32_t)mat_meta.alpha_mode;
+		mat_cfg.alphaCutoff = mat_meta.alpha_cutoff;
+		mat_cfg.flipNormal = mat_meta.double_sided ? 1 : 0;
+		mat_cfg.unlit = mat_meta.unlit ? 1 : 0;
+
+		GeometryFrag::TextureIds& tex_ids = mat_ubo.textureIds;
+		GeometryFrag::SamplerIds& samp_ids = mat_ubo.samplerIds;
 
 		int bc_id = mat_meta.base_color.id;
 		if (bc_id < 0) {
-			_mat_ubos->set(id, StaticUBOAccess()["texIds"]["baseColorId"], &INVALID_MANAGER_HANDLE_ID);
-			_mat_ubos->set(id, StaticUBOAccess()["samplerIds"]["baseColorId"], &INVALID_MANAGER_HANDLE_ID);
+			tex_ids.baseColorId = INVALID_MANAGER_HANDLE_ID;
+			samp_ids.baseColorId = INVALID_MANAGER_HANDLE_ID;
 		}
 		else {
-			_mat_ubos->set(id, StaticUBOAccess()["texIds"]["baseColorId"], &_tex_metas.at(bc_id).image.id);
-			_mat_ubos->set(id, StaticUBOAccess()["samplerIds"]["baseColorId"], &_tex_metas.at(bc_id).sampler.id);
+			tex_ids.baseColorId = _tex_metas.at(bc_id).image.id;
+			samp_ids.baseColorId = _tex_metas.at(bc_id).sampler.id;
 		}
 
 		int n_id = mat_meta.normal.id;
 		if (n_id < 0) {
-			_mat_ubos->set(id, StaticUBOAccess()["texIds"]["normalId"], &INVALID_MANAGER_HANDLE_ID);
-			_mat_ubos->set(id, StaticUBOAccess()["samplerIds"]["normalId"], &INVALID_MANAGER_HANDLE_ID);
+			tex_ids.normalId = INVALID_MANAGER_HANDLE_ID;
+			samp_ids.normalId = INVALID_MANAGER_HANDLE_ID;
 		}
 		else {
-			_mat_ubos->set(id, StaticUBOAccess()["texIds"]["normalId"], &_tex_metas.at(n_id).image.id);
-			_mat_ubos->set(id, StaticUBOAccess()["samplerIds"]["normalId"], &_tex_metas.at(n_id).sampler.id);
+			tex_ids.normalId = _tex_metas.at(n_id).image.id;
+			samp_ids.normalId = _tex_metas.at(n_id).sampler.id;
 		}
 
 		int mr_id = mat_meta.metallic_roughness.id;
 		if (mr_id < 0) {
-			_mat_ubos->set(id, StaticUBOAccess()["texIds"]["metallicRoughnessId"], &INVALID_MANAGER_HANDLE_ID);
-			_mat_ubos->set(id, StaticUBOAccess()["samplerIds"]["metallicRoughnessId"], &INVALID_MANAGER_HANDLE_ID);
+			tex_ids.metallicRoughnessId = INVALID_MANAGER_HANDLE_ID;
+			samp_ids.metallicRoughnessId = INVALID_MANAGER_HANDLE_ID;
 		}
 		else {
-			_mat_ubos->set(id, StaticUBOAccess()["texIds"]["metallicRoughnessId"], &_tex_metas.at(mr_id).image.id);
-			_mat_ubos->set(id, StaticUBOAccess()["samplerIds"]["metallicRoughnessId"], &_tex_metas.at(mr_id).sampler.id);
+			tex_ids.metallicRoughnessId = _tex_metas.at(mr_id).image.id;
+			samp_ids.metallicRoughnessId = _tex_metas.at(mr_id).sampler.id;
+		}
+
+		int em_id = mat_meta.emissive.id;
+		if (em_id < 0) {
+			tex_ids.emissiveId = INVALID_MANAGER_HANDLE_ID;
+			samp_ids.emissiveId = INVALID_MANAGER_HANDLE_ID;
+		}
+		else {
+			tex_ids.emissiveId = _tex_metas.at(em_id).image.id;
+			samp_ids.emissiveId = _tex_metas.at(em_id).sampler.id;
 		}
 
 		int occ_id = mat_meta.occlusion.id; assert(occ_id == INVALID_MANAGER_HANDLE_ID);
-		int em_id = mat_meta.emissive.id; assert(em_id == INVALID_MANAGER_HANDLE_ID);
+
+		_mat_ubos->set(id, mat_ubo);
 	}
-	
+
 	// binding 1 -- images
 	std::vector<otcv::Image*> imgs;
 	for (uint32_t id = 0; id < _img_metas.size(); ++id) {

@@ -45,3 +45,9 @@ private:
 
 	static SquareBound bound_frustum(glm::mat3 light_space_inv, uint32_t resolution, const FrustumUtils::Frustum& frustum);
 };
+
+glm::vec4 encode_proj(const glm::mat4& proj);
+
+glm::mat4 encoded_persp_proj_inv(glm::vec4 enc);
+
+glm::mat4 encoded_ortho_proj_inv(glm::vec4 enc);

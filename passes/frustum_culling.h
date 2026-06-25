@@ -4,6 +4,8 @@
 #include "otcv_utils.h"
 #include "resource_managers/resource_context.h"
 
+#include "glsl_reflect/scene_culling/frustum_cull.comp.hpp"
+
 class FrustumCulling {
 public:
 	struct PassConfig {
@@ -36,9 +38,8 @@ private:
 	std::shared_ptr<otcv::NaiveExpandableDescriptorPool> _desc_pool;
 	struct ObjectDescSetContext {
 		otcv::DescriptorSet*	set;
-		std::shared_ptr<otcv::SSBO>	ssbo_indices;
-		std::shared_ptr<otcv::SSBO>	ssbo_objects;
-		std::shared_ptr<otcv::SSBO>	ssbo_aabbs;
+		std::shared_ptr<otcv::SSBO<FrustumCullComp::ObjectIndexBuffer>>	ssbo_indices;
+		std::shared_ptr<otcv::SSBO<FrustumCullComp::ObjectBuffer>>		ssbo_objects;
 	};
 	std::vector<ObjectDescSetContext>	_obj_desc_sets;	// one for each pipeline variant
 

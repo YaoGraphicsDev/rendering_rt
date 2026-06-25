@@ -16,19 +16,21 @@ layout (push_constant) uniform PushConstants {
 	mat4 projectView;
 } consts;
 
-layout(set = 1, binding = 0) uniform ObjectUBO {
+layout(set = 1, binding = 0) uniform ModelMatUBO {
     mat4 model;
+} mmUbos[];
+layout(set = 1, binding = 1) uniform MatIdUBO {
     int matId;
-} oUbos[];
+} miUbos[];
 
 void main() {
 	uint objId = gl_BaseInstance;
 
-	mat4 objModelMat = oUbos[nonuniformEXT(objId)].model;
+	mat4 objModelMat = mmUbos[objId].model;
 	gl_Position = consts.projectView * objModelMat * vec4(inPosition, 1.0f);
 	outWorldNormal = normalize(inverse(transpose(mat3(objModelMat))) * vec3(inNormal));
 	outUV = inUV;
 	vec3 worldTangent = normalize(mat3(objModelMat) * vec3(inTangent));
 	outWorldTangent = vec4(worldTangent, inTangent.w);
-	outMaterialId = oUbos[nonuniformEXT(objId)].matId;
+	outMaterialId = miUbos[objId].matId;
 }

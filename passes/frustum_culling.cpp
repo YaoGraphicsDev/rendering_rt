@@ -29,55 +29,47 @@ FrustumCulling::FrustumCulling(const PassConfig& cfg) {
 	_desc_pool.reset(new NaiveExpandableDescriptorPool);
 
 	// set objects SSBO
-	std::shared_ptr<SSBO> ssbo_objects = nullptr;
+	std::shared_ptr<SSBO<FrustumCullComp::ObjectBuffer>> ssbo_objects = nullptr;
 	{
-		Std430AlignmentType ObjectData;
-		ObjectData.add(Std430AlignmentType::InlineType::Mat4, "model");
-		ObjectData.add(Std430AlignmentType::InlineType::Uint, "indexCount");
-		ObjectData.add(Std430AlignmentType::InlineType::Uint, "firstIndex");
-		ObjectData.add(Std430AlignmentType::InlineType::Int, "vertexOffset");
 		uint32_t n_renderables = _res->scene_mgr->_renderable_metas.size();
-		ssbo_objects = std::make_shared<SSBO>(ObjectData, n_renderables);
-		std::vector<SSBO::WriteContext> ssbo_objects_writes(n_renderables);
+		ssbo_objects = std::make_shared<SSBO<FrustumCullComp::ObjectBuffer>>(n_renderables);
+		std::vector<SSBOWriteContext> ssbo_objects_writes(n_renderables);
 		for (uint32_t i = 0; i < n_renderables; ++i) {
 			RenderableMeta rm = _res->scene_mgr->_renderable_metas.at(i);
 			const SceneNodeMeta& snm = _res->scene_mgr->_node_metas.at(rm.node.id);
 			ssbo_objects_writes[i].id = i;
-			ssbo_objects_writes[i].access_ctxs.push_back({ SSBOAccess()["model"], &snm.world_transform }); // for static objects only
+			ssbo_objects_writes[i].access_ctxs.push_back({ FIELD_RANGE(FrustumCullComp::ObjectBuffer::Element, model), &snm.world_transform });
 			MeshManager::MeshDataSegment& segment = _res->mesh_mgr->_mesh_segments.at(rm.mesh.id);
-			ssbo_objects_writes[i].access_ctxs.push_back({ SSBOAccess()["indexCount"], &segment.index_count });
-			ssbo_objects_writes[i].access_ctxs.push_back({ SSBOAccess()["firstIndex"], &segment.index_start });
-			ssbo_objects_writes[i].access_ctxs.push_back({ SSBOAccess()["vertexOffset"], &segment.vertex_start });
+			ssbo_objects_writes[i].access_ctxs.push_back({ FIELD_RANGE(FrustumCullComp::ObjectBuffer::Element, indexCount), &segment.index_count });
+			ssbo_objects_writes[i].access_ctxs.push_back({ FIELD_RANGE(FrustumCullComp::ObjectBuffer::Element, firstIndex), &segment.index_start });
+			ssbo_objects_writes[i].access_ctxs.push_back({ FIELD_RANGE(FrustumCullComp::ObjectBuffer::Element, vertexOffset), &segment.vertex_start });
 		}
 		ssbo_objects->write(ssbo_objects_writes);
 	}
 
 	// set indices SSBOs
 	const RenderQueue& rq = *_res->render_queue;
-	std::vector<std::shared_ptr<SSBO>> ssbos_indices;
+	std::vector<std::shared_ptr<SSBO<FrustumCullComp::ObjectIndexBuffer>>> ssbos_indices;
+
 	if (_pipeline_diff) {
 		for (const RenderQueue::OrderRange& order_range : rq._order_ranges) {
-			Std430AlignmentType Index;
-			Index.add(Std430AlignmentType::InlineType::Uint, "value");
-			ssbos_indices.push_back(std::make_shared<SSBO>(Index, order_range.count));
+			ssbos_indices.push_back(std::make_shared<SSBO<FrustumCullComp::ObjectIndexBuffer>>(order_range.count));
 
 			std::vector<uint32_t> ioi(order_range.count); // indices of interest
 			for (uint32_t i = 0; i < order_range.count; ++i) {
 				ioi[i] = rq._order.at(order_range.start + i).id;
 			}
 
-			std::vector<SSBO::WriteContext> ssbo_indices_writes(ioi.size());
+			std::vector<SSBOWriteContext> ssbo_indices_writes(ioi.size());
 			for (uint32_t i = 0; i < ioi.size(); ++i) {
 				ssbo_indices_writes[i].id = i;
-				ssbo_indices_writes[i].access_ctxs.push_back({ SSBOAccess()["value"], &ioi[i] });
+				ssbo_indices_writes[i].access_ctxs.push_back({ FIELD_RANGE(FrustumCullComp::ObjectIndexBuffer::Element, value), &ioi[i] });
 			}
 			ssbos_indices.back()->write(ssbo_indices_writes);
 		}
 	}
 	else {
-		Std430AlignmentType Index;
-		Index.add(Std430AlignmentType::InlineType::Uint, "value");
-		ssbos_indices.push_back(std::make_shared<SSBO>(Index, rq._order.size()));
+		ssbos_indices.push_back(std::make_shared<SSBO<FrustumCullComp::ObjectIndexBuffer>>(rq._order.size()));
 
 		std::vector<uint32_t> ioi(rq._order.size()); // indices of interest. Covers full range of _order
 		assert(rq._order_ranges.front().start == 0);
@@ -86,10 +78,10 @@ FrustumCulling::FrustumCulling(const PassConfig& cfg) {
 			ioi[i] = rq._order.at(i).id;
 		}
 
-		std::vector<SSBO::WriteContext> ssbo_indices_writes(ioi.size());
+		std::vector<SSBOWriteContext> ssbo_indices_writes(ioi.size());
 		for (uint32_t i = 0; i < ioi.size(); ++i) {
 			ssbo_indices_writes[i].id = i;
-			ssbo_indices_writes[i].access_ctxs.push_back({ SSBOAccess()["value"], &ioi[i] });
+			ssbo_indices_writes[i].access_ctxs.push_back({ FIELD_RANGE(FrustumCullComp::ObjectIndexBuffer::Element, value), &ioi[i] });
 		}
 		ssbos_indices.back()->write(ssbo_indices_writes);
 	}
@@ -108,8 +100,7 @@ FrustumCulling::FrustumCulling(const PassConfig& cfg) {
 		set_ctx.set->bind_buffer(0, set_ctx.ssbo_indices->_buf);
 		set_ctx.ssbo_objects = ssbo_objects;
 		set_ctx.set->bind_buffer(1, set_ctx.ssbo_objects->_buf);
-		set_ctx.ssbo_aabbs = rq._mesh_prep->AABB_SSBO();
-		set_ctx.set->bind_buffer(2, set_ctx.ssbo_aabbs->_buf);
+		set_ctx.set->bind_buffer(2, rq._mesh_prep->AABB_SSBO()->_buf);
 	}
 }
 

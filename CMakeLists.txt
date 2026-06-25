@@ -48,6 +48,7 @@ target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/resource_mana
 target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/passes")
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_BINARY_DIR}/include")
 
 #configure OTCV
 set(OTCV_SPIRV_CROSS_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../Libraries/SPIRV-Cross")
@@ -57,7 +58,9 @@ option(OTCV_ENABLE_IMGUI "" ON)
 set(OTCV_IMGUI_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../libraries/imgui")
 set(OTCV_ENABLE_SHADER_TOOL ON)
 set(OTCV_GLSL_IN_PATH "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+set(OTCV_GLSL_INCLUDE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/shaders/common")
 set(OTCV_SPIRV_OUT_PATH "${CMAKE_BINARY_DIR}/spirv")
+set(OTCV_GLSL_REFLECT_HEADER_OUT_PATH "${CMAKE_BINARY_DIR}/include/glsl_reflect")
 set(OTCV_ENABLE_FRAME_GRAPH ON)
 set(OTCV_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../otcv")
 add_subdirectory(${OTCV_PATH} ${CMAKE_BINARY_DIR}/otcv)
@@ -76,3 +79,13 @@ set(TINYGLTF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../libraries/tinygltf")
 message(STATUS "TINYGLTF_PATH = ${TINYGLTF_PATH}")
 target_include_directories(${PROJECT_NAME} PUBLIC ${TINYGLTF_PATH})
 
+# set tinyddsloader path
+set(TINYDDSLOADER_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../libraries/tinyddsloader")
+message(STATUS "TINYDDSLOADER_PATH = ${TINYDDSLOADER_PATH}")
+target_include_directories(${PROJECT_NAME} PUBLIC ${TINYDDSLOADER_PATH})
+
+# copy assets to build folder 
+file(COPY
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    DESTINATION "${CMAKE_BINARY_DIR}"
+)

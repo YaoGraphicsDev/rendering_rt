@@ -1,0 +1,62 @@
+#version 450
+layout(local_size_x = 64) in;
+
+layout (push_constant) uniform PushConstants {
+    vec4 frustum_faces[6]; // in world space
+} consts;
+
+struct Light {
+    uint type; // 0 -- point, 1 -- directional, 2 -- area
+    float intensity;
+    vec3 color;
+    vec3 center; // in world space
+    
+    // Doesnt guarantee right-handedness
+    vec3 lightDirection;
+    vec3 planeBasisX;
+    vec3 planeBasisY; 
+    vec2 halfDims;    // area light exclusive (half width, half height)
+    float influenceDistance; // bounding sphere radius
+};
+layout(std430, set = 1, binding = 0) readonly buffer LightBuffer {
+    Light lights[];
+};
+
+// Set 3: Managed by framegraph
+//  binding 0 - 15:     textures
+//  binding 16 - 23:    SSBO
+//  binding 24 - 31:    storage image
+struct Count {
+    uint value;
+};
+layout(std430, set = 3, binding = 16) writeonly buffer LightIdBuffer {
+    Count visibleLightIds[];
+};
+layout(std430, set = 3, binding = 17) buffer LightCountBuffer { // atomicAdd() operation. Cant have writeonly keyword
+    Count visibleLightIdCount[]; // only one element, set to zero
+};
+
+float signed_distance_to_plane(vec3 p, vec4 plane) {
+    return dot(p, plane.xyz) + plane.w;
+}
+
+bool isVisible(uint lightId) {
+    for (uint i = 0; i < 6; ++i) {
+        float d = signed_distance_to_plane(lights[lightId].center, consts.frustum_faces[i]);
+        if (d > lights[lightId].influenceDistance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void main() {
+    uint lightId = gl_GlobalInvocationID.x;
+    if (lightId >= lights.length()) {
+        return;
+    }
+    if (isVisible(lightId)) {
+        uint i = atomicAdd(visibleLightIdCount[0].value, 1);
+        visibleLightIds[i].value = lightId;
+    }
+}

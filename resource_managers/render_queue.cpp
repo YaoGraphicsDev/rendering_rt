@@ -65,23 +65,16 @@ RenderQueue::RenderQueue(
 		_order_ranges.push_back(td_range);
 	}
 
-	//_order_range_map[PassType::Opaque][PipelineVariant::BackFaceCulled] = _order_ranges.size();
-	//_order_ranges.push_back(append_order(opaque_culled));
-	//_order_range_map[PassType::Opaque][PipelineVariant::DoubleSided] = _order_ranges.size();
-	//_order_ranges.push_back(append_order(opaque_double));
-	//_order_range_map[PassType::Transparent][PipelineVariant::BackFaceCulled] = _order_ranges.size();
-	//_order_ranges.push_back(append_order(trans_culled));
-	//_order_range_map[PassType::Transparent][PipelineVariant::DoubleSided] = _order_ranges.size();
-	//_order_ranges.push_back(append_order(trans_double));
-
 	// generate aabbs
 	_mesh_prep.reset(new MeshPreprocessor(mesh_preprocessor_path));
 	// reorder vertex offsets and counts
 	std::vector<uint32_t> vertex_offsets;
 	std::vector<uint32_t> vertex_counts;
-	for (RenderableHandle rh : _order) {
-		vertex_offsets.push_back(mesh_mgr->_mesh_segments.at(rh.id).vertex_start);
-		vertex_counts.push_back(mesh_mgr->_mesh_segments.at(rh.id).vertex_count);
+	for (uint32_t i = 0; i < n_renderables; ++i) {
+		const RenderableMeta& rm = scene_mgr->_renderable_metas.at(i);
+		const auto& segment = mesh_mgr->_mesh_segments.at(rm.mesh.id);
+		vertex_offsets.push_back(segment.vertex_start);
+		vertex_counts.push_back(segment.vertex_count);
 	}
 	_mesh_prep->generate_aabb(
 		mesh_mgr->_vb->buffers[0],

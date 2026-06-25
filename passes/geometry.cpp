@@ -11,7 +11,8 @@ GeometryPass::GeometryPass(const PassConfig& cfg) {
 	uint32_t n_images = _res->material_mgr->_img_metas.size();
 	uint32_t n_samplers = _res->material_mgr->_samp_metas.size();
 	std::map<uint32_t, uint32_t> vs_indexing_limits = {
-		{pack(DescriptorSetRate::PerObject, 0), n_renderables}
+		{pack(DescriptorSetRate::PerObject, 0), n_renderables},
+		{pack(DescriptorSetRate::PerObject, 1), n_renderables}
 	};
 	std::map<uint32_t, uint32_t> fs_indexing_limits = {
 		{pack(DescriptorSetRate::PerMaterial, 0), n_materials},
@@ -53,15 +54,18 @@ GeometryPass::GeometryPass(const PassConfig& cfg) {
 	const std::vector<DescriptorSetLayout*>& set_layouts = _pipeline_map.begin()->second->desc_set_layouts;
 	_pipeline_layout = _pipeline_map.begin()->second->pipeline_layout;
 	// bind object descriptor set
-	{
-		_obj_desc_set = _desc_pool->allocate(set_layouts[DescriptorSetRate::PerObject]);
-		std::shared_ptr<StaticUBOArray> ubo_arr = _res->scene_mgr->_renderable_ubos;
-		_obj_desc_set->bind_buffer_array(0, ubo_arr->_buf, 0, ubo_arr->_stride, ubo_arr->_n_ubos);
+	_obj_desc_sets.resize(_res->scene_mgr->_per_frame_bos.size());
+	for (uint32_t f = 0; f < _obj_desc_sets.size(); ++f) {
+		_obj_desc_sets[f] = _desc_pool->allocate(set_layouts[DescriptorSetRate::PerObject]);
+		auto model_arr = _res->scene_mgr->_per_frame_bos[f].model_mats;
+		auto mat_id_arr = _res->scene_mgr->_per_frame_bos[f].mat_ids;
+		_obj_desc_sets[f]->bind_buffer_array(0, model_arr->_buf, 0, model_arr->_stride, model_arr->_n_ubos);
+		_obj_desc_sets[f]->bind_buffer_array(1, mat_id_arr->_buf, 0, mat_id_arr->_stride, mat_id_arr->_n_ubos);
 	}
 	// bind material descriptor set
 	{
 		_material_desc_set = _desc_pool->allocate(set_layouts[DescriptorSetRate::PerMaterial]);
-		std::shared_ptr<StaticUBOArray> ubo_arr = _res->material_mgr->_mat_ubos;
+		auto ubo_arr = _res->material_mgr->_mat_ubos;
 		_material_desc_set->bind_buffer_array(0, ubo_arr->_buf, 0, ubo_arr->_stride, ubo_arr->_n_ubos);
 		std::vector<Image*>& imgs = _res->material_mgr->_imgs;
 		_material_desc_set->bind_sampled_image(1, imgs.data(), 0, imgs.size());
@@ -84,7 +88,7 @@ void GeometryPass::commands(CommandContext& ctx) {
 	ctx.cmd_buf->cmd_bind_vertex_buffer(_res->mesh_mgr->_vb);
 	ctx.cmd_buf->cmd_bind_index_buffer(_res->mesh_mgr->_ib, VK_INDEX_TYPE_UINT16);
 
-	ctx.cmd_buf->cmd_bind_graphics_descriptor_set(_pipeline_layout, _obj_desc_set, DescriptorSetRate::PerObject);
+	ctx.cmd_buf->cmd_bind_graphics_descriptor_set(_pipeline_layout, _obj_desc_sets[ctx.fg_frame_id], DescriptorSetRate::PerObject);
 	ctx.cmd_buf->cmd_bind_graphics_descriptor_set(_pipeline_layout, _material_desc_set, DescriptorSetRate::PerMaterial);
 
 	glm::mat4 project_view = ctx.proj * ctx.view;
@@ -96,15 +100,13 @@ void GeometryPass::commands(CommandContext& ctx) {
 
 		RenderQueue::PipelineVariant pv = p.first;
 		RenderQueue::OrderRange renderable_range = _res->render_queue->range_of(RenderQueue::PassType::Opaque, pv); // the start index of this specific type of renderable
-		Std430AlignmentType::Range command_range = ctx.indirect_cmd_layout.range_of(renderable_range.start, SSBOAccess());
 		uint32_t count_index = _res->render_queue->range_index_of(RenderQueue::PassType::Opaque, pv);
-		Std430AlignmentType::Range count_range = ctx.indirect_count_layout.range_of(count_index, SSBOAccess());
 		ctx.cmd_buf->cmd_draw_indexed_indirect_count(
 			ctx.fg_indirect_cmd,
-			command_range.offset,
+			ctx.indirect_cmd_stride * renderable_range.start,
 			ctx.fg_indirect_count,
-			count_range.offset,
+			ctx.indirect_count_stride * count_index,
 			renderable_range.count,
-			command_range.stride);
+			ctx.indirect_cmd_stride);
 	}
 }

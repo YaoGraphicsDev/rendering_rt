@@ -3,29 +3,85 @@
 #include "gltf_parser/gltf_parser.h"
 #include "passes/passes.h"
 #include "common/camera.h"
+#include "common/free_roam.h"
 #include "common/math_utils.h"
+
+#include "glsl_reflect/light_clustering/assign_lights.comp.hpp"
+#include "glsl_reflect/scene_culling/frustum_cull.comp.hpp"
 
 using namespace otcv;
 
 struct CSMParams {
-    static constexpr uint32_t n_cascades = 3;
+    static constexpr uint32_t n_cascades = 4;
     static constexpr uint32_t resolution = 2048;
-    static constexpr float blend_overlap = 1.0f;
+    static constexpr float blend_overlap = 0.5f; // we dont really need to blend between cascades here. Just a buffer zone
 };
 std::vector<CSMUtils::CascadeContext> csm_ctxs;
 
-glm::vec3 light_direction(2.0f, -7.0f, 1.0f); // TODO: fixed directional light for now, will have a light manager in the future
+struct LightClusterParams {
+    static constexpr glm::uvec3 n_clusters = glm::uvec3(32, 32, 32);
+    static constexpr glm::uint max_lights_per_cluster = 32;
+};
 
 int main() {
+    const uint32_t startup_window_width = 960;
+    const uint32_t startup_window_height = 480;
+    std::shared_ptr<PerspectiveCamera> cam = std::make_shared<PerspectiveCamera>(
+        glm::vec3(2.67119622f, 2.41205978f, -1.46302509f),
+        glm::vec3(1.81380475f, 2.02222157f, -1.12700975f),
+        glm::vec3(0.0f, 1.0f, 0.0f),
+        0.1f,
+        40.0f,
+        glm::radians(60.0f),
+        (float)startup_window_width / (float)startup_window_height);
+    std::shared_ptr<FreeRoam> free_roam = std::make_shared<FreeRoam>();
+    
+    struct FreeRoamContext {
+        std::shared_ptr<PerspectiveCamera>  cam         = nullptr;
+        std::shared_ptr<FreeRoam>           controller  = nullptr;
+    };
+    FreeRoamContext fr_ctx = { cam, free_roam };
+
     fg::Application::Config config;
-    config.desired_window_width = 960;
-    config.desired_window_height = 480;
+    config.desired_window_width = startup_window_width;
+    config.desired_window_height = startup_window_height;
+    config.user_cb_data = &fr_ctx;
+    config.key_cb = [](GLFWwindow* w, int key, int scancode, int action, int mods) {
+        FreeRoamContext* fr_ctx = static_cast<FreeRoamContext*>(glfwGetWindowUserPointer(w));
+        auto cam = fr_ctx->cam;
+        auto controller = fr_ctx->controller;
+        // press C to toggle free roam camera
+        if (key == GLFW_KEY_C && action == GLFW_PRESS) {
+            if (!controller->enabled) {
+                // initialize free roam
+                controller->enter_free_roam(cam->eye, cam->center);
+                glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            }
+            else {
+                // exit free roam
+                controller->exit_free_roam();
+                glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+        }
+
+        if (controller->enabled && (action == GLFW_PRESS || action == GLFW_RELEASE)) {
+            controller->on_key(key, action);
+        }
+    };
+    config.cursor_pos_cb = [](GLFWwindow* w, double x, double y) {
+        FreeRoamContext* fr_ctx = static_cast<FreeRoamContext*>(glfwGetWindowUserPointer(w));
+        auto controller = fr_ctx->controller;
+
+        if (controller->enabled) {
+            controller->on_mouse_move(x, y);
+        }
+    };
     std::shared_ptr<fg::Application> fg_app = std::make_shared<fg::Application>(config); // implicitly initialize otcv context here
 
     std::shared_ptr<SceneManager> scene_mgr = std::make_shared<SceneManager>();
     std::shared_ptr<MeshManager> mesh_mgr = std::make_shared<MeshManager>();
     std::shared_ptr<MaterialManager> mat_mgr = std::make_shared<MaterialManager>();
-    if (!load_gltf("C:/Users/Yao/models/Sponza/glTF/Sponza.gltf", scene_mgr, mat_mgr, mesh_mgr)) {
+    if (!load_gltf("C:/Users/Yao/models/sponza_lit/sponza_lit.gltf", scene_mgr, mat_mgr, mesh_mgr)) {
         std::cout << "Cannot load gltf file" << std::endl;
         assert(false);
         exit(1);
@@ -39,27 +95,6 @@ int main() {
     res_ctx->mesh_mgr = mesh_mgr;
     res_ctx->material_mgr = mat_mgr;
     res_ctx->render_queue = std::make_shared<RenderQueue>(scene_mgr, mesh_mgr, mat_mgr, "./spirv/mesh_preprocess/");
-    
-    std::shared_ptr<PerspectiveCamera> cam = std::make_shared<PerspectiveCamera>(
-        glm::vec3(15.0f, 15.0f, 15.0f),
-        glm::vec3(0.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f, 1.0f, 0.0f),
-        0.1f,
-        50.0f,
-        glm::radians(60.0f),
-        (float)config.desired_window_width / (float)config.desired_window_height);
-
-    Std430AlignmentType IndirectDrawCmd;
-    IndirectDrawCmd.add(Std430AlignmentType::InlineType::Uint, "indexCount");
-    IndirectDrawCmd.add(Std430AlignmentType::InlineType::Uint, "instanceCount");
-    IndirectDrawCmd.add(Std430AlignmentType::InlineType::Uint, "firstIndex");
-    IndirectDrawCmd.add(Std430AlignmentType::InlineType::Int, "vertexOffset");
-    IndirectDrawCmd.add(Std430AlignmentType::InlineType::Uint, "firstInstance");
-    SSBOLayout IndirectDrawCmdLayout(IndirectDrawCmd, scene_mgr->_renderable_metas.size());
-
-    Std430AlignmentType IndirectDrawCount;
-    IndirectDrawCount.add(Std430AlignmentType::InlineType::Uint, "value");
-    SSBOLayout IndirectDrawCountLayout(IndirectDrawCount, res_ctx->render_queue->_order_ranges.size());
 
     // declare lighting pass here as it gets updated every frame
     std::shared_ptr<LightingPass> lp = nullptr;
@@ -73,12 +108,12 @@ int main() {
         // resources
         BufferBuilder indirect_cmd_builder =
             BufferBuilder()
-            .size(IndirectDrawCmdLayout._builder._info.size)
+            .size(FrustumCullComp::IndirectBuffer::ElementStride * scene_mgr->_renderable_metas.size())
             .host_access(otcv::BufferBuilder::Access::Invisible);
-        
+
         BufferBuilder indirect_count_builder =
             BufferBuilder()
-            .size(IndirectDrawCountLayout._builder._info.size)
+            .size(FrustumCullComp::DrawCountBuffer::ElementStride * res_ctx->render_queue->_order_ranges.size())
             .host_access(otcv::BufferBuilder::Access::Invisible);
 
         fg::ResourceHandle g_indirect_cmds_zero = fg->add_resource("GIndirectCmdsZeros", indirect_cmd_builder);
@@ -99,7 +134,18 @@ int main() {
         fg::ResourceHandle g_metallic_roughness = fg->add_resource("GMetallicRoughness",
             ImageBuilder()
             .size(window_width, window_height, 1)
-            .format(VK_FORMAT_R8G8B8A8_UNORM));
+            .format(VK_FORMAT_R8G8_UNORM));
+
+        fg::ResourceHandle g_emissive = fg->add_resource("GEmissive",
+            ImageBuilder()
+            .size(window_width, window_height, 1)
+            // That's what Unity URP store it https://docs.unity3d.com/Packages/com.unity.render-pipelines.universal@16.0/manual/rendering/deferred-rendering-path.html
+            .format(VK_FORMAT_B10G11R11_UFLOAT_PACK32));
+
+        fg::ResourceHandle g_mat_flags = fg->add_resource("GMatFlags",
+            ImageBuilder()
+            .size(window_width, window_height, 1)
+            .format(VK_FORMAT_R8_UINT));
 
         fg::ResourceHandle g_depth = fg->add_resource("GDepth",
             ImageBuilder()
@@ -123,6 +169,27 @@ int main() {
             .layers(CSMParams::n_cascades)
             .view_type(VK_IMAGE_VIEW_TYPE_2D_ARRAY)
             .aspect(VK_IMAGE_ASPECT_DEPTH_BIT));
+
+        BufferBuilder visible_light_id_builder =
+            BufferBuilder()
+            .size(AssignLightsComp::VisibleLightIdBuffer::ElementStride * scene_mgr->_light_metas.size())
+            .host_access(otcv::BufferBuilder::Access::Invisible);
+
+        BufferBuilder visible_light_count_builder =
+            BufferBuilder()
+            .size(AssignLightsComp::VisibleLightCountBuffer::ElementStride)
+            .host_access(otcv::BufferBuilder::Access::Invisible);
+
+        BufferBuilder light_assign_builder =
+            BufferBuilder()
+            .size(AssignLightsComp::LightAssignmentBuffer::ElementStride * LightClusterParams::n_clusters.x * LightClusterParams::n_clusters.y * LightClusterParams::n_clusters.z)
+            .host_access(otcv::BufferBuilder::Access::Invisible);
+
+        fg::ResourceHandle visible_light_ids_zero = fg->add_resource("LightIdZeros", visible_light_id_builder);
+        fg::ResourceHandle visible_light_count_zero = fg->add_resource("LightCountZero", visible_light_count_builder);
+        fg::ResourceHandle visible_light_ids_filled = fg->add_resource("LightIdFilled", visible_light_id_builder);
+        fg::ResourceHandle visible_light_count_filled = fg->add_resource("LightCountFilled", visible_light_count_builder);
+        fg::ResourceHandle light_assign = fg->add_resource("LightAssign", light_assign_builder);
 
         fg::ResourceHandle lit = fg->add_resource("Lit",
             ImageBuilder()
@@ -157,7 +224,7 @@ int main() {
             fg::Pass& g_frustum_cull_pass = fg->add_pass("GFrustumCull", fg::PassType::Compute);
             g_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, g_indirect_cmds_zero, g_indirect_cmds_filled);
             g_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, g_indirect_counts_zero, g_indirect_counts_filled);
-            g_frustum_cull_pass.execute_func([gfc, cam](CommandBuffer* cmd, fg::PassContext& ctx) {
+            g_frustum_cull_pass.execute_func([gfc, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
                 FrustumCulling::CommandContext fc_ctx;
                 fc_ctx.cmd_buf = cmd;
                 fc_ctx.proj = cam->proj;
@@ -175,7 +242,9 @@ int main() {
             cfg.color_attachment_formats = {
                 fg->get_img_builder(g_albedo)._image_info.format,
                 fg->get_img_builder(g_normal)._image_info.format,
-                fg->get_img_builder(g_metallic_roughness)._image_info.format };
+                fg->get_img_builder(g_metallic_roughness)._image_info.format,
+                fg->get_img_builder(g_emissive)._image_info.format,
+                fg->get_img_builder(g_mat_flags)._image_info.format };
             cfg.depth_attachment_format = fg->get_img_builder(g_depth)._image_info.format;
             std::shared_ptr<GeometryPass> gp = std::make_shared<GeometryPass>(cfg);
 
@@ -194,6 +263,14 @@ int main() {
             g_pass.store_load_func(g_metallic_roughness, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
             });
+            g_pass.access(fg::ResourceAccessType::ColorOut, g_emissive);
+            g_pass.store_load_func(g_emissive, [](RenderingBegin::Attachment& attachment) {
+                attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
+            });
+            g_pass.access(fg::ResourceAccessType::ColorOut, g_mat_flags);
+            g_pass.store_load_func(g_mat_flags, [](RenderingBegin::Attachment& attachment) {
+                attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(uint32_t(0));
+            });
             g_pass.access(fg::ResourceAccessType::DepthStencilOut, g_depth);
             g_pass.store_load_func(g_depth, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(1.0f, 0);
@@ -201,15 +278,16 @@ int main() {
             g_pass.render_area_func([window_width, window_height](RenderingBegin& begin) {
                 begin.area(window_width, window_height);
             });
-            g_pass.execute_func([gp, &IndirectDrawCmdLayout, &IndirectDrawCountLayout, window_width, window_height, cam](CommandBuffer* cmd, fg::PassContext& ctx) {
+            g_pass.execute_func([app, gp, window_width, window_height, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
                 GeometryPass::CommandContext g_ctx;
                 g_ctx.cmd_buf = cmd;
                 g_ctx.proj = cam->proj;
                 g_ctx.view = cam->view;
                 g_ctx.fg_indirect_cmd = ctx.indirect_bufs.at(0);
-                g_ctx.indirect_cmd_layout = IndirectDrawCmdLayout;
+                g_ctx.indirect_cmd_stride = FrustumCullComp::IndirectBuffer::ElementStride;
                 g_ctx.fg_indirect_count = ctx.indirect_bufs.at(1);
-                g_ctx.indirect_count_layout = IndirectDrawCountLayout;
+                g_ctx.indirect_count_stride = FrustumCullComp::DrawCountBuffer::ElementStride;
+                g_ctx.fg_frame_id = app->current_frame();
                 g_ctx.width = window_width;
                 g_ctx.height = window_height;
                 gp->commands(g_ctx);
@@ -245,11 +323,11 @@ int main() {
                 fg::Pass& s_frustum_cull_pass = fg->add_pass("SFrustumCull", fg::PassType::Compute);
                 s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, s_indirect_cmds_zero, s_indirect_cmds_filled);
                 s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, s_indirect_counts_zero, s_indirect_counts_filled);
-                s_frustum_cull_pass.execute_func([sfc, cam](CommandBuffer* cmd, fg::PassContext& ctx) {
+                s_frustum_cull_pass.execute_func([sfc, i](CommandBuffer* cmd, fg::PassContext& ctx) {
                     FrustumCulling::CommandContext fc_ctx;
                     fc_ctx.cmd_buf = cmd;
-                    fc_ctx.proj = cam->proj;
-                    fc_ctx.view = cam->view;
+                    fc_ctx.proj = csm_ctxs[i].light_proj;
+                    fc_ctx.view = csm_ctxs[i].light_view;
                     fc_ctx.fg_set = ctx.desc_set;
                     sfc->commands(fc_ctx);
                 });
@@ -273,15 +351,15 @@ int main() {
                 shadow_pass.render_area_func([](RenderingBegin& begin) {
                     begin.area(CSMParams::resolution, CSMParams::resolution);
                 });
-                shadow_pass.execute_func([&IndirectDrawCmdLayout, &IndirectDrawCountLayout, sm, cam, i](CommandBuffer* cmd, fg::PassContext& ctx) {
+                shadow_pass.execute_func([app, sm, i](CommandBuffer* cmd, fg::PassContext& ctx) {
                     ShadowMapping::CommandContext s_ctx;
                     s_ctx.cmd_buf = cmd;
                     s_ctx.light_proj = csm_ctxs[i].light_proj;
                     s_ctx.light_view = csm_ctxs[i].light_view;
                     s_ctx.fg_indirect_cmd = ctx.indirect_bufs.at(0);
-                    s_ctx.indirect_cmd_layout = IndirectDrawCmdLayout;
+                    s_ctx.indirect_cmd_stride = FrustumCullComp::IndirectBuffer::ElementStride;
                     s_ctx.fg_indirect_count = ctx.indirect_bufs.at(1);
-                    s_ctx.indirect_count_layout = IndirectDrawCountLayout;
+                    s_ctx.fg_frame_id = app->current_frame();
                     s_ctx.width = CSMParams::resolution;
                     s_ctx.height = CSMParams::resolution;
                     sm->commands(s_ctx);
@@ -307,11 +385,65 @@ int main() {
             });
         }
 
+        // light clustering pass
+        {
+            // clear buffer for light clustering
+            fg::Pass& light_culling_clear_pass = fg->add_pass("LightCullingClearPass", fg::PassType::Transfer);
+            light_culling_clear_pass.access(fg::ResourceAccessType::TransferOut, visible_light_ids_zero);
+            light_culling_clear_pass.access(fg::ResourceAccessType::TransferOut, visible_light_count_zero);
+            light_culling_clear_pass.execute_func([](CommandBuffer* cmd, fg::PassContext& ctx) {
+                cmd->cmd_fill_buffer(ctx.transfer_bufs.at(0), 0);
+                cmd->cmd_fill_buffer(ctx.transfer_bufs.at(1), 0);
+            });
+        }
+        {
+            LightClustering::PassConfig cfg;
+            cfg.res_context = res_ctx;
+            cfg.shader_dir = "./spirv/light_clustering/";
+            cfg.n_clusters = LightClusterParams::n_clusters;
+            cfg.width = window_width;
+            cfg.height = window_height;
+            cfg.z_near_abs = cam->near;
+            cfg.z_far_abs = cam->far;
+            cfg.inv_proj = cam->proj_inv;
+            std::shared_ptr<LightClustering> lc = std::make_shared<LightClustering>(cfg);
+
+            // light culling
+            fg::Pass& light_culling_pass = fg->add_pass("LightCulling", fg::PassType::Compute);
+            light_culling_pass.access(fg::ResourceAccessType::SSBOInOut, visible_light_ids_zero, visible_light_ids_filled);
+            light_culling_pass.access(fg::ResourceAccessType::SSBOInOut, visible_light_count_zero, visible_light_count_filled);
+            light_culling_pass.execute_func([app, lc, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
+                LightClustering::CullContext c_ctx;
+                c_ctx.cmd_buf = cmd;
+                c_ctx.proj = cam->proj;
+                c_ctx.view = cam->view;
+                c_ctx.fg_set = ctx.desc_set;
+                c_ctx.fg_frame_id = app->current_frame();
+                lc->cull_commands(c_ctx);
+            });
+
+            // assign lights to clusters
+            fg::Pass& light_assign_pass = fg->add_pass("LightAssign", fg::PassType::Compute);
+            light_assign_pass.access(fg::ResourceAccessType::SSBOIn, visible_light_ids_filled);
+            light_assign_pass.access(fg::ResourceAccessType::SSBOIn, visible_light_count_filled);
+            light_assign_pass.access(fg::ResourceAccessType::SSBOOut, light_assign); // light assignment buffer 
+            light_assign_pass.execute_func([app, lc, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
+                LightClustering::AssignContext a_ctx;
+                a_ctx.cmd_buf = cmd;
+                a_ctx.view = cam->view;
+                a_ctx.fg_set = ctx.desc_set;
+                a_ctx.fg_frame_id = app->current_frame();
+                lc->assign_commands(a_ctx);
+            });
+        }
+
+
         // lighting pass
         {
             LightingPass::PassConfig cfg;
             cfg.res_context = res_ctx;
             cfg.shader_dir = "./spirv/lighting_pass/";
+            cfg.lct_luts_paths = { "./assets/lct/lut_0.dds", "./assets/lct/lut_1.dds" };
             cfg.color_attachment_format = fg->get_img_builder(lit)._image_info.format;
             cfg.cascaded_shadow.n_cascades = CSMParams::n_cascades;
             cfg.cascaded_shadow.blend_depth = CSMParams::blend_overlap;
@@ -323,7 +455,10 @@ int main() {
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_albedo);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_normal);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_metallic_roughness);
+            lighting_pass.access(fg::ResourceAccessType::TextureIn, g_emissive);
+            lighting_pass.access(fg::ResourceAccessType::TextureIn, g_mat_flags);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, shadow_cascades);
+            lighting_pass.access(fg::ResourceAccessType::SSBOIn, light_assign);
             lighting_pass.access(fg::ResourceAccessType::ColorOut, lit);
             lighting_pass.store_load_func(lit, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
@@ -331,11 +466,13 @@ int main() {
             lighting_pass.render_area_func([window_width, window_height](RenderingBegin& begin) {
                 begin.area(window_width, window_height);
             });
-            lighting_pass.execute_func([app, window_width, window_height, lp](CommandBuffer* cmd, fg::PassContext& ctx) {
+            lighting_pass.execute_func([app, window_width, window_height, lp, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
                 LightingPass::CommandContext s_ctx;
                 s_ctx.cmd_buf = cmd;
                 s_ctx.fg_set = ctx.desc_set;
                 s_ctx.fg_frame_id = app->current_frame();
+                s_ctx.cam = cam;
+                s_ctx.n_clusters = LightClusterParams::n_clusters; // light cluster dimensions
                 s_ctx.width = window_width;
                 s_ctx.height = window_height;
                 lp->commands(s_ctx);
@@ -374,27 +511,39 @@ int main() {
         }
     };
 
+    SceneNodeHandle area_light_snh = scene_mgr->get_node_handle("LightPlane");
+    SceneNodeHandle sun_snh = scene_mgr->get_node_handle("Sun");
+    SceneNodeMeta sun_node = scene_mgr->get_node(sun_snh);
+    LightMeta& sun_light = scene_mgr->get_light(sun_snh);
     auto frame_update = [&](fg::Application* app) {
         uint32_t width = app->otcv_context().swapchain->image_info.extent.width;
         uint32_t height = app->otcv_context().swapchain->image_info.extent.height;
 
+        float dt = 1.0f / 60.0f; // TODO: assume 60fps for now. Should be passed as update parameter
+        free_roam->update(dt, cam->eye, cam->center, cam->up);
+
         // update camera
         cam->aspect = (float)width / (float)height;
         cam->update_view();
-        cam->update_proj();
+        // TODO: This is not right actually. If projection matrix is not updated upon window resize then the scene will look squeezed/stretched.
+        // But updating projection matrix somehow messes up light clusters. Don't light clusters get rebuilt upon framegraph rebuild? Doesnt make sense
+        // Fix this.
+        // cam->update_proj();
 
-        // TODO: update light here
+        // update scene
+        if (area_light_snh.id != INVALID_MANAGER_HANDLE_ID) {
+            scene_mgr->move_node_local(area_light_snh, glm::vec3(0.0f), glm::rotate(glm::mat4(1.0f), dt, glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f));
+        }
+        scene_mgr->update(app->current_frame());
 
         // update CSM parameters
         csm_ctxs = CSMUtils::csm_ortho_projections(
             cam->proj, cam->view, cam->near, cam->far,
-            light_direction,
+            glm::vec3(sun_node.world_transform * glm::vec4(sun_light.direction, 0.0f)),
             CSMParams::n_cascades, CSMParams::resolution, CSMParams::blend_overlap);
 
         // update lighiting pass
         LightingPass::UpdateContext lp_ctx;
-        lp_ctx.inv_proj = glm::inverse(cam->proj);
-        lp_ctx.inv_view = glm::inverse(cam->view);
         lp_ctx.shadow.cascades = csm_ctxs;
         lp_ctx.width = width;
         lp_ctx.height = height;

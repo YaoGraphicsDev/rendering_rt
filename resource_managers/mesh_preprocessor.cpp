@@ -31,23 +31,17 @@ void MeshPreprocessor::generate_aabb(
 
 	_aabb_in_desc_set->bind_buffer(0, positions);
 
-	Std430AlignmentType MeshInfo;
-	MeshInfo.add(Std430AlignmentType::InlineType::Uint, "firstVertex");
-	MeshInfo.add(Std430AlignmentType::InlineType::Uint, "vertexCount");
-	_mesh_info_ssbo.reset(new SSBO(MeshInfo, n_obj));
-	std::vector<SSBO::WriteContext> ssbo_writes(n_obj);
+	_mesh_info_ssbo.reset(new SSBO<AabbComp::MeshInfoBuffer>(n_obj));
+	std::vector<SSBOWriteContext> ssbo_writes(n_obj);
 	for (uint32_t i = 0; i < n_obj; ++i) {
 		ssbo_writes[i].id = i;
-		ssbo_writes[i].access_ctxs.push_back({ SSBOAccess()["firstVertex"], &vertex_offsets[i] });
-		ssbo_writes[i].access_ctxs.push_back({ SSBOAccess()["vertexCount"], &vertex_counts[i] });
+		ssbo_writes[i].access_ctxs.push_back({ FIELD_RANGE(AabbComp::MeshInfoBuffer::Element, firstVertex), &vertex_offsets[i] });
+		ssbo_writes[i].access_ctxs.push_back({ FIELD_RANGE(AabbComp::MeshInfoBuffer::Element, vertexCount), &vertex_counts[i] });
 	}
 	_mesh_info_ssbo->write(ssbo_writes);
 	_aabb_in_desc_set->bind_buffer(1, _mesh_info_ssbo->_buf);
 
-	Std430AlignmentType AABB;
-	AABB.add(Std430AlignmentType::InlineType::Vec3, "min");
-	AABB.add(Std430AlignmentType::InlineType::Vec3, "max");
-	_aabb_ssbo.reset(new SSBO(AABB, n_obj));
+	_aabb_ssbo.reset(new SSBO<AabbComp::AABBBuffer>(n_obj));
 	_aabb_out_desc_set->bind_buffer(0, _aabb_ssbo->_buf);
 
 	_cmd_buf->begin(true);

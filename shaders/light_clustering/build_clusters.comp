@@ -1,0 +1,59 @@
+#version 450
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in; // 1 invocation for each cluster
+
+layout (push_constant) uniform PushConstants {
+	uvec3 nClusters; // number of clusters in x, y, z direction
+	uvec2 screenSize;
+	vec2 zRangeAbs; // (zNear, zFar), should be positive
+	mat4 projInv;
+} consts;
+
+struct AABB {
+	vec3 min;
+    vec3 max;
+};
+
+layout(std430, set = 2, binding = 0) writeonly buffer ClusterAABBBuffer {
+    AABB aabbs[];
+};
+
+vec3 screenToView(vec2 uv, mat4 projectInv) { 
+	vec4 ndc = vec4(uv * 2.0 - 1.0, 1.0f, 1.0f); // placed on far plane
+    vec4 viewSpaceCoord = projectInv * ndc;
+    return (viewSpaceCoord * vec4(1.0f / viewSpaceCoord.w)).xyz;
+}
+
+void main() {
+	uvec3 clusterCoord = uvec3(gl_WorkGroupID.x, gl_WorkGroupID.y, gl_WorkGroupID.z);
+	uint clusterId = clusterCoord.x + (clusterCoord.y * consts.nClusters.x) + (clusterCoord.z * consts.nClusters.x * consts.nClusters.y);
+	vec2 tileSize = vec2(consts.screenSize) / vec2(consts.nClusters.xy);
+
+	vec2 screenSpaceTL = gl_WorkGroupID.xy * tileSize; // top left corner of screen tile, screen space
+	vec2 screenSpaceBR = screenSpaceTL + tileSize;	// bottom right corner of screen tile, screen space
+
+	// view space coordinate convention dictates z coordinate is negative
+	vec3 viewSpaceTL = screenToView(screenSpaceTL / consts.screenSize, consts.projInv); // The coordinates of screen tile top left corner, placed on the far z plane
+	vec3 viewSpaceBR = screenToView(screenSpaceBR / consts.screenSize, consts.projInv); // The coordinates of screen tile bottom right corner, placed on the far z plane
+
+	float camZNearAbs = consts.zRangeAbs.x;
+	float camZFarAbs = consts.zRangeAbs.y;
+
+	float kNear = float(clusterCoord.z) / float(consts.nClusters.z);
+	float kFar = float(clusterCoord.z + 1) / float(consts.nClusters.z);
+	float h = camZFarAbs / camZNearAbs;
+
+	// near z and far z plane of this cluster, in view space
+	float zNearAbs = max(camZNearAbs * pow(h, kNear), camZNearAbs);
+	float zFarAbs = min(camZNearAbs * pow(h, kFar), camZFarAbs);
+	float zNearRatio = zNearAbs / consts.zRangeAbs.y;
+	float zFarRatio = zFarAbs / consts.zRangeAbs.y;
+
+	vec3 nearTL = viewSpaceTL * zNearRatio;
+	vec3 nearBR = viewSpaceBR * zNearRatio;
+	vec3 farTL = viewSpaceTL * zFarRatio;
+	vec3 farBR = viewSpaceBR * zFarRatio;
+
+	// Since view space z coordinates are negative, AABB's min should actually be on the far plane of this cluster
+	aabbs[clusterId].min = min(min(farTL, farBR), min(nearTL, nearBR));
+	aabbs[clusterId].max = max(max(farTL, farBR), max(nearTL, nearBR));
+}

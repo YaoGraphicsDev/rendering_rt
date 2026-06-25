@@ -2,6 +2,8 @@
 #include "otcv.h"
 #include "otcv_utils.h"
 
+#include "glsl_reflect/mesh_preprocess/aabb.comp.hpp"
+
 class MeshPreprocessor {
 public:
 	MeshPreprocessor(const std::string& shader_path);
@@ -16,7 +18,7 @@ public:
 		otcv::ResourceState position_target_state,
 		otcv::ResourceState aabb_buffer_target_state);
 
-	std::shared_ptr<otcv::SSBO> AABB_SSBO() { return _aabb_ssbo; }
+	std::shared_ptr<otcv::SSBO<AabbComp::AABBBuffer>> AABB_SSBO() { return _aabb_ssbo; }
 
 private:
 	otcv::ShaderBlob _mesh_presprocess_blob;
@@ -26,8 +28,8 @@ private:
 
 	otcv::DescriptorSet* _aabb_in_desc_set;
 	otcv::DescriptorSet* _aabb_out_desc_set;
-	std::shared_ptr<otcv::SSBO> _mesh_info_ssbo;
-	std::shared_ptr<otcv::SSBO> _aabb_ssbo;
+	std::shared_ptr<otcv::SSBO<AabbComp::MeshInfoBuffer>> _mesh_info_ssbo;
+	std::shared_ptr<otcv::SSBO<AabbComp::AABBBuffer>> _aabb_ssbo;
 
 	otcv::CommandBuffer* _cmd_buf;
 

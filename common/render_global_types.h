@@ -2,14 +2,6 @@
 
 #include <cstdint>
 
-enum class RenderPassType {
-	Shadow = 0,
-	Geometry,
-	Lighting,
-	PostProcess,
-	All
-};
-
 enum DescriptorSetRate : uint32_t {
 	PerFrame = 0,
 	PerObject = 1,
