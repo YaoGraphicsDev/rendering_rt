@@ -1,6 +1,7 @@
 #version 450
 #extension GL_EXT_nonuniform_qualifier : require
 #extension GL_EXT_samplerless_texture_functions : require
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec3 inWorldNormal;
 layout(location = 1) in vec2 inUV;				// only one set of UV for now
@@ -13,37 +14,11 @@ layout(location = 2) out vec4 outMetallicRoughness;
 layout(location = 3) out vec4 outEmissive;
 layout(location = 4) out uint outMatFlags;
 
-#define ALPHA_MODE_OPQAUE	0
-#define ALPHA_MODE_MASK		1
-struct MaterialCfg {
-	vec4 baseColorFactor;
-	vec4 mrnoFactor; // 4 factors: metallic - roughness - normal scale - occlusion strength
-	vec3 emissiveColorStrength; // rgb color * strength
-	uint alphaMode; // 0 - opaque, 1 - mask, 2 - blend
-	float alphaCutoff;
-	uint flipNormal; // 0 - dont need to flip, 1 - need to flip
-	uint unlit; // 0 -- lit, 1 -- unlit
-};
+#include "types.glsl" //! #include "../common/types.glsl"
 
-struct TextureIds {
-    int baseColorId;
-    int normalId;
-    int metallicRoughnessId;
-	int emissiveId;
+layout(std430, set = 2, binding = 0) readonly buffer MaterialBuffer {
+    MaterialInfo materials[];
 };
-
-struct SamplerIds {
-	int baseColorId;
-	int normalId;
-	int metallicRoughnessId;
-	int emissiveId;
-};
-
-layout(set = 2, binding = 0) uniform MaterialUBO {
-    MaterialCfg materialCfg;
-    TextureIds textureIds;
-	SamplerIds samplerIds;
-} mUbos[];
 
 layout(set = 2, binding = 1) uniform texture2D textures[];
 layout(set = 2, binding = 2) uniform sampler samplers[];
@@ -54,9 +29,9 @@ void main() {
 		discard;
 	}
 
-    MaterialCfg cfg = mUbos[inMaterialId].materialCfg;
-    TextureIds texIds = mUbos[inMaterialId].textureIds;
-	SamplerIds samplerIds = mUbos[inMaterialId].samplerIds;
+    MaterialCfg cfg = materials[inMaterialId].materialCfg;
+    TextureIds texIds = materials[inMaterialId].textureIds;
+	SamplerIds samplerIds = materials[inMaterialId].samplerIds;
 
     vec4 albedo = vec4(1.0f);
     if (texIds.baseColorId >= 0 && samplerIds.baseColorId >= 0) {

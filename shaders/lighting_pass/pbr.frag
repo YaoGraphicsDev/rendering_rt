@@ -738,7 +738,7 @@ void main() {
         // outLit *= vec4(lights[lightId].color, 1.0f);
     }
     
-    vec3 ambient = vec3(0.03) * albedo;
+    vec3 ambient = vec3(0.0) * albedo;
     outLit = vec4((ambient + litColor), 1.0f);
 
     // for (uint i = 0; i < lightAssign[clusterId].nLights; ++i) {

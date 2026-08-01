@@ -137,7 +137,7 @@ public:
 	// GPU objects
 	std::vector<otcv::Image*>								_imgs;
 	std::vector<otcv::Sampler*>								_samps;
-	std::shared_ptr<otcv::StaticUBOArray<GeometryFrag::MaterialUBO>>							_mat_ubos = nullptr;
+	std::shared_ptr<otcv::SSBO<GeometryFrag::MaterialBuffer>>	_mat_ssbo = nullptr;
 
 
 	// pack(channels, bit_depth) | color_space, VkFormat

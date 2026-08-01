@@ -32,13 +32,14 @@ void MeshPreprocessor::generate_aabb(
 	_aabb_in_desc_set->bind_buffer(0, positions);
 
 	_mesh_info_ssbo.reset(new SSBO<AabbComp::MeshInfoBuffer>(n_obj));
-	std::vector<SSBOWriteContext> ssbo_writes(n_obj);
+
+	std::vector<AabbComp::MeshInfo> mesh_info_buf(n_obj);
 	for (uint32_t i = 0; i < n_obj; ++i) {
-		ssbo_writes[i].id = i;
-		ssbo_writes[i].access_ctxs.push_back({ FIELD_RANGE(AabbComp::MeshInfoBuffer::Element, firstVertex), &vertex_offsets[i] });
-		ssbo_writes[i].access_ctxs.push_back({ FIELD_RANGE(AabbComp::MeshInfoBuffer::Element, vertexCount), &vertex_counts[i] });
+		mesh_info_buf[i].firstVertex = vertex_offsets[i];
+		mesh_info_buf[i].vertexCount = vertex_counts[i];
 	}
-	_mesh_info_ssbo->write(ssbo_writes);
+	_mesh_info_ssbo->full_sync_write(mesh_info_buf);
+
 	_aabb_in_desc_set->bind_buffer(1, _mesh_info_ssbo->_buf);
 
 	_aabb_ssbo.reset(new SSBO<AabbComp::AABBBuffer>(n_obj));

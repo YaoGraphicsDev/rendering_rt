@@ -57,7 +57,7 @@ void MeshManager::bindless_build() {
 	{
 		otcv::BufferBuilder ibb;
 		ibb.size(indices.size() * sizeof(uint16_t))
-			.usage(VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+			.usage(VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) // ray tracing in compute shader 
 			.host_access(otcv::BufferBuilder::Access::Invisible);
 		_ib = new otcv::Buffer(ibb);
 		_ib->populate_async(indices.data(), otcv::Buffer::SyncType::GPUBarrier, otcv::ResourceState::IndexRead, otcv::ResourceState::Created);
@@ -177,7 +177,7 @@ void MeshManager::bindless_build() {
 			otcv::BufferBuilder b_builder;
 			b_builder
 				.size(normals.size() * sizeof(glm::vec3))
-				.usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+				.usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) // ray tracing in compute shader 
 				.host_access(otcv::BufferBuilder::Access::Invisible);
 			vb_builder.add_binding(b_builder);
 			vb_builder.add_attribute(1, VK_FORMAT_R32G32B32_SFLOAT, sizeof(glm::vec3));
@@ -187,7 +187,7 @@ void MeshManager::bindless_build() {
 			otcv::BufferBuilder b_builder;
 			b_builder
 				.size(uv0s.size() * sizeof(glm::vec2))
-				.usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+				.usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) // ray tracing in compute shader 
 				.host_access(otcv::BufferBuilder::Access::Invisible);
 			vb_builder.add_binding(b_builder);
 			vb_builder.add_attribute(2, VK_FORMAT_R32G32_SFLOAT, sizeof(glm::vec2));

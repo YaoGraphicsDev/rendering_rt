@@ -126,7 +126,7 @@ void SceneManager::bindless_build() {
 	{
 		uint32_t n_lights = _light_metas.size();
 		for (PerFrameBOs& f_bo : _per_frame_bos) {
-			f_bo.lights.reset(new StagedWriteSSBO<PbrFrag::LightBuffer>(n_lights));
+			f_bo.lights.reset(new SSBO<PbrFrag::LightBuffer>(n_lights));
 			for (uint32_t i = 0; i < n_lights; ++i) {
 				const LightMeta& lm = _light_metas[i];
 				SceneNodeMeta& snm = _node_metas.at(lm.node.id);

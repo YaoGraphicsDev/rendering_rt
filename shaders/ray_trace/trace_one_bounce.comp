@@ -1,0 +1,274 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+// #extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout (push_constant) uniform PushConstants {
+	uvec2 rayTexSize; // width, height
+    vec3 lightDir; // temporary. One directional light only
+    float lightIntensity;
+    vec3 lightColor;
+} consts;
+
+struct InstanceInfo {
+    uint firstGeometry;
+    mat3 modelInvT;
+};
+layout(std430, set = 1, binding = 0) readonly buffer InstanceInfoBuffer {
+    InstanceInfo instances[];
+};
+struct GeometryInfo {
+    uint firstIndex;
+    uint vertexOffset;
+    int matId;
+};
+layout(std430, set = 1, binding = 1) readonly buffer GeometryInfoBuffer {
+    GeometryInfo geometries[];
+};
+
+// vertex, index, material buffer store objects in the same order as renderables
+// layout(std430, set = 1, binding = 2) readonly buffer PositionBuffer {
+//     float positions[]; // use an array of float instead of vec3 to avoid std430 padding issues
+// };
+layout(std430, set = 1, binding = 3) readonly buffer NormalBuffer {
+    float normals[]; // use an array of float instead of vec3 to avoid std430 padding issues
+};
+// We only care about diffuse when updating probes. So normal mapping is not necessary, hence no tangent buffer
+layout(std430, set = 1, binding = 4) readonly buffer UVBuffer {
+    float uvs[]; // use an array of float instead of vec3 to avoid std430 padding issues
+};
+layout(std430, set = 1, binding = 5) readonly buffer IndexBuffer {
+    uint16_t indices[]; 
+};
+#include "types.glsl" //! #include "../common/types.glsl"
+layout(std430, set = 1, binding = 6) readonly buffer MaterialBuffer {
+    MaterialInfo materials[];
+};
+
+layout(set = 1, binding = 7) uniform texture2D textures[];
+layout(set = 1, binding = 8) uniform sampler samplers[];
+layout(set = 1, binding = 9) uniform accelerationStructureEXT topLevelAS;
+layout(set = 1, binding = 10) uniform sampler samplerRay;       // nearest
+
+// Set 3: Managed by framegraph
+//  binding 0 - 15:     textures
+//  binding 16 - 23:    SSBO
+//  binding 24 - 31:    storage image
+layout(set = 3, binding = 0) uniform texture2D texRayOrigins;
+layout(set = 3, binding = 1) uniform texture2D texRayDirections;
+layout(set = 3, binding = 24) uniform writeonly image2D imgRayHitLocations;
+layout(set = 3, binding = 25) uniform writeonly image2D imgRayHitRadiance;
+layout(set = 3, binding = 26) uniform writeonly image2D imgRayHitNormals;
+
+// vec3 packPosition(uint id) {
+//     uint idBase = id * 3;
+//     float x = positions[idBase + 0];
+//     float y = positions[idBase + 1];
+//     float z = positions[idBase + 2];
+//     return vec3(x, y, z);
+// }
+vec3 packNormal(uint id) {
+    uint idBase = id * 3;
+    float x = normals[idBase + 0];
+    float y = normals[idBase + 1];
+    float z = normals[idBase + 2];
+    return vec3(x, y, z);
+}
+vec2 packUV(uint id) {
+    uint idBase = id * 2;
+    float x = uvs[idBase + 0];
+    float y = uvs[idBase + 1];
+    return vec2(x, y);
+}
+
+struct IntersectionInfo {
+    uint type; // intersection type, return value of rayQueryGetIntersectionTypeEXT(). For committed, non intersection type nullifies all following fields
+    float rayT;
+    bool frontFace;
+    uint instanceID;
+    uint geometryID;
+    uint triangleID;
+    vec3 baryCoord;
+};
+
+IntersectionInfo committedIntersection(rayQueryEXT rayQuery) {
+    IntersectionInfo info;
+    info.type = rayQueryGetIntersectionTypeEXT(rayQuery, true);
+    if (info.type == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return info;
+    }
+    info.rayT = rayQueryGetIntersectionTEXT(rayQuery, true);
+    info.frontFace = rayQueryGetIntersectionFrontFaceEXT(rayQuery, true);
+    info.instanceID = rayQueryGetIntersectionInstanceIdEXT(rayQuery, true);
+    info.geometryID = rayQueryGetIntersectionGeometryIndexEXT(rayQuery, true);
+    info.triangleID = rayQueryGetIntersectionPrimitiveIndexEXT(rayQuery, true);
+    vec2 baryCoordXY = rayQueryGetIntersectionBarycentricsEXT(rayQuery, true); // return vec2 xy, barycentric coordinate should be (1-x-y, x, y)
+    info.baryCoord = vec3(1.0 - baryCoordXY.x - baryCoordXY.y, baryCoordXY);
+    return info;
+}
+
+IntersectionInfo candidateIntersection(rayQueryEXT rayQuery) {
+    IntersectionInfo info;
+    info.type = rayQueryGetIntersectionTypeEXT(rayQuery, false);
+    info.rayT = rayQueryGetIntersectionTEXT(rayQuery, false);
+    info.frontFace = rayQueryGetIntersectionFrontFaceEXT(rayQuery, false);
+    info.instanceID = rayQueryGetIntersectionInstanceIdEXT(rayQuery, false);
+    info.geometryID = rayQueryGetIntersectionGeometryIndexEXT(rayQuery, false);
+    info.triangleID = rayQueryGetIntersectionPrimitiveIndexEXT(rayQuery, false);
+    vec2 baryCoordXY = rayQueryGetIntersectionBarycentricsEXT(rayQuery, false); // return vec2 xy, barycentric coordinate should be (1-x-y, x, y)
+    info.baryCoord = vec3(1.0 - baryCoordXY.x - baryCoordXY.y, baryCoordXY);
+    return info;
+}
+
+struct HitProfile {
+    vec3 normal; // return flipped normal if a hit occurs on the backside, disregarding the flipNormal flag of material
+    vec2 uv;
+    vec4 albedo;
+    float alphaCutoff;
+};
+HitProfile hitProfile(IntersectionInfo itscInfo) {
+    HitProfile prof;    
+    InstanceInfo inst = instances[itscInfo.instanceID];
+    GeometryInfo geo = geometries[inst.firstGeometry + itscInfo.geometryID];
+
+    uint idBase = geo.firstIndex + itscInfo.triangleID * 3;
+    uint id0 = uint(indices[idBase + 0]) + geo.vertexOffset;
+    uint id1 = uint(indices[idBase + 1]) + geo.vertexOffset;
+    uint id2 = uint(indices[idBase + 2]) + geo.vertexOffset;
+
+    vec3 n0 = packNormal(id0);
+    vec3 n1 = packNormal(id1);
+    vec3 n2 = packNormal(id2);
+    prof.normal = normalize(inst.modelInvT * (mat3(n0, n1, n2) * itscInfo.baryCoord)); // geometry normal. No normal mapping
+    if (!itscInfo.frontFace) {
+        prof.normal = -prof.normal;
+    }
+
+    vec2 uv0 = packUV(id0);
+    vec2 uv1 = packUV(id1);
+    vec2 uv2 = packUV(id2);
+    prof.uv = vec2(mat3(vec3(uv0, 0.0), vec3(uv1, 0.0), vec3(uv2, 0.0)) * itscInfo.baryCoord);
+
+    if (geo.matId < 0) {
+        // not a valid material. May not be a good idea, at least assign some default material to it
+        prof.albedo = vec4(vec3(0.0), 1.0);
+        return prof;
+    }
+
+    MaterialCfg matCfg = materials[geo.matId].materialCfg;
+    TextureIds texIds = materials[geo.matId].textureIds;
+	SamplerIds samplerIds = materials[geo.matId].samplerIds;
+
+    vec4 albedo = vec4(1.0f);
+    if (texIds.baseColorId >= 0 && samplerIds.baseColorId >= 0) {
+        albedo = texture(sampler2D( // TODO: use textureLod + a lod level (float) to sample mipmaps
+			textures[texIds.baseColorId],
+			samplers[samplerIds.baseColorId]),
+			prof.uv);
+    }
+    prof.albedo = albedo * matCfg.baseColorFactor;
+
+    if (matCfg.alphaMode == ALPHA_MODE_MASK) {
+        prof.alphaCutoff = matCfg.alphaCutoff;
+    } else {
+        prof.alphaCutoff = 0.0;
+    }
+
+    return prof;
+}
+
+#include "math_utils.glsl" //! #include "../common/math_utils.glsl"
+
+const float rayTMin = 0.001f;
+const float rayTMax = 100.0f; // TODO: tMax value pulled out of my ass
+
+void main() {
+    ivec2 invoID = ivec2(gl_GlobalInvocationID.xy); // dictates which texel current compute unit's result will go into
+
+    if (any(greaterThanEqual(invoID, consts.rayTexSize))) {
+        return;
+    }
+    // uint rayID = invoID.y * rayTexSize.x + invoID.x;
+    vec3 rayOrigin = texelFetch(sampler2D(texRayOrigins, samplerRay), invoID, 0).xyz;
+    vec3 rayDirection = texelFetch(sampler2D(texRayDirections, samplerRay), invoID, 0).xyz;
+
+    // scene geometry hit
+    rayQueryEXT rayQuery;
+    rayQueryInitializeEXT(
+        rayQuery,
+        topLevelAS,
+        gl_RayFlagsNoneEXT, // will take closest as complete, will expose non-opaque candidates along the ray as candidates. Only commits to the nearest upon completion
+        0xFF,
+        rayOrigin,
+        rayTMin,
+        rayDirection,
+        rayTMax); // TODO: tMax value pulled out of my ass
+    while (rayQueryProceedEXT(rayQuery)) {
+        // a candidate
+        IntersectionInfo itscInfo = candidateIntersection(rayQuery);
+        if (itscInfo.type == gl_RayQueryCandidateIntersectionTriangleEXT) {
+            HitProfile hitProf = hitProfile(itscInfo);
+            if (hitProf.albedo.a >= hitProf.alphaCutoff) {
+                // alpha passed
+                rayQueryConfirmIntersectionEXT(rayQuery); // commits
+            }
+        }
+    }
+
+    IntersectionInfo itscInfo = committedIntersection(rayQuery);
+    if (itscInfo.type == gl_RayQueryCommittedIntersectionNoneEXT) {
+        // TODO: add skybox support
+        imageStore(imgRayHitLocations, ivec2(invoID), vec4(0.0));
+        imageStore(imgRayHitNormals, ivec2(invoID), vec4(0.0));
+        imageStore(imgRayHitRadiance, ivec2(invoID), vec4(0.53, 0.81, 0.92, 1.0)); // temporary: sky radiance. clear overhead noon sky
+        return;
+    }
+    
+    HitProfile hitProf = hitProfile(itscInfo);
+    vec3 pAtHit = rayOrigin + itscInfo.rayT * rayDirection;
+
+    imageStore(imgRayHitLocations, ivec2(invoID), vec4(pAtHit, 0.0));
+    imageStore(imgRayHitNormals, ivec2(invoID), vec4(hitProf.normal, 0.0));
+
+    vec3 n = hitProf.normal;
+    vec3 l = -normalize(consts.lightDir);
+
+    // first bounce, light visibility
+    float visibility = 0.0;
+    rayQueryInitializeEXT(
+        rayQuery,
+        topLevelAS,
+        gl_RayFlagsNoneEXT, // will take closest as complete, will expose non-opaque candidates along the ray as candidates. Only commits to the nearest upon completion
+        0xFF,
+        pAtHit,
+        rayTMin,
+        l,
+        rayTMax); // TODO: tMax value pulled out of my ass
+    while (rayQueryProceedEXT(rayQuery)) {
+        // a candidate
+        IntersectionInfo itscInfo = candidateIntersection(rayQuery);
+        if (itscInfo.type == gl_RayQueryCandidateIntersectionTriangleEXT) {
+            HitProfile hitProf = hitProfile(itscInfo);
+            if (hitProf.albedo.a >= hitProf.alphaCutoff) {
+                // alpha passed
+                rayQueryConfirmIntersectionEXT(rayQuery); // commits
+            }
+        }
+    }
+    itscInfo = committedIntersection(rayQuery);
+    if (itscInfo.type == gl_RayQueryCommittedIntersectionNoneEXT) {
+        // visible
+        visibility = 1.0;
+    }
+
+    // TODO: lambertian diffuse. Should also account for metallic factor: 1-metallic
+    vec3 radiance = vec3(hitProf.albedo) * invPI * consts.lightColor * consts.lightIntensity * max(0.0, dot(n, l)) * visibility; 
+    // vec3 radiance = rayDirection;
+    imageStore(imgRayHitRadiance, ivec2(invoID), vec4(radiance, 0.0));
+
+}
+

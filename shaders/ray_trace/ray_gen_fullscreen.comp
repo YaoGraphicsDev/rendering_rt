@@ -1,0 +1,32 @@
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout (push_constant) uniform PushConstants {
+	vec3 camPos;
+    vec3 topLeft;
+    vec3 pixelDeltaX; // pointing right
+    vec3 pixelDeltaY; // pointing down
+    ivec2 resolution; // width, height
+} consts;
+
+// Set 3: Managed by framegraph
+//  binding 0 - 15:     textures
+//  binding 16 - 23:    SSBO
+//  binding 24 - 31:    storage image
+layout(set = 3, binding = 24) uniform writeonly image2D imgRayOrigins;
+layout(set = 3, binding = 25) uniform writeonly image2D imgRayDirections;
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy); // dictates which texel current compute unit's result will go into
+    if (any(greaterThanEqual(pixelCoord, consts.resolution))) {
+        return;
+    }
+
+    imageStore(imgRayOrigins, pixelCoord, vec4(consts.camPos, 0.0));
+
+    vec3 rayEnd = consts.topLeft + consts.pixelDeltaX * (float(pixelCoord.x) + 0.5) + consts.pixelDeltaY * (pixelCoord.y + 0.5);
+    vec3 rayDir = normalize(rayEnd - consts.camPos);
+
+    imageStore(imgRayDirections, pixelCoord, vec4(rayDir, 0.0));
+}

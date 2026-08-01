@@ -1,0 +1,62 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout (push_constant) uniform PushConstants {
+	vec3 probeStart;
+    vec3 probeStep;
+    mat3 probeOrientation;
+    int raysPerProbe; // equal to the width of generated image
+    ivec3 probeCounts; // powers of two in all dimensions. x * y * z equal to the height of generated image
+} consts;
+
+// Set 3: Managed by framegraph
+//  binding 0 - 15:     textures
+//  binding 16 - 23:    SSBO
+//  binding 24 - 31:    storage image
+layout(set = 3, binding = 24) uniform writeonly image2D imgRayOrigins;
+layout(set = 3, binding = 25) uniform writeonly image2D imgRayDirections;
+
+#include "probe_indexing.glsl" //! #include "../common/probe_indexing.glsl"
+
+// code below was stolen from the DDGI paper's demo https://jcgt.org/published/0008/02/01/ . Also https://github.com/xuechao-chen/DDGI/tree/master/source
+
+vec3 probeLocation(int index) {
+    return gridCoordToPosition(probeIndexToGridCoord(index, consts.probeCounts), consts.probeStart, consts.probeStep);
+}
+
+#include "math_utils.glsl" //! #include "../common/math_utils.glsl"
+
+vec3 sphericalFibonacci(float i, float n) {
+    const float PHI = sqrt(5) * 0.5 + 0.5;
+#   define madfrac(A, B) ((A)*(B)-floor((A)*(B)))
+    float phi = 2.0 * PI * madfrac(i, PHI - 1);
+    float cosTheta = 1.0 - (2.0 * i + 1.0) * (1.0 / n);
+    float sinTheta = sqrt(clamp(1.0 - cosTheta*cosTheta, 0.0, 1.0));
+
+    return vec3(
+        cos(phi) * sinTheta,
+        sin(phi) * sinTheta,
+        cosTheta);
+
+#   undef madfrac
+}
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy); // dictates which texel current compute unit's result will go into
+    int nProbes = consts.probeCounts.x * consts.probeCounts.y * consts.probeCounts.z;
+
+    if (any(greaterThanEqual(pixelCoord, ivec2(consts.raysPerProbe, nProbes)))) {
+        return;
+    }
+    
+    int probeID = pixelCoord.y;
+    int rayID   = pixelCoord.x;
+    
+    // This value should be on the order of the normal bias.
+    const float rayMinDistance = 1.0;//0.08;
+    
+    imageStore(imgRayOrigins, pixelCoord, vec4(probeLocation(probeID), rayMinDistance));
+    imageStore(imgRayDirections, pixelCoord, vec4(consts.probeOrientation * sphericalFibonacci(float(rayID), float(consts.raysPerProbe)), 0.0));
+}

@@ -53,14 +53,18 @@ void MaterialManager::bindless_build() {
 
 
 	// binding 0 -- material ubos
-	_mat_ubos.reset(new StaticUBOArray<GeometryFrag::MaterialUBO>(_mat_metas.size()));
+	_mat_ssbo.reset(new SSBO<GeometryFrag::MaterialBuffer>(_mat_metas.size()));
+	std::vector<GeometryFrag::MaterialInfo> mat_info_buf(_mat_metas.size());
+
+	// _mat_ubos.reset(new StaticUBOArray<GeometryFrag::MaterialUBO>(_mat_metas.size()));
 
 	// upload material data to ubo
 	for (uint32_t id = 0; id < _mat_metas.size(); ++id) {
 		MaterialMeta& mat_meta = _mat_metas[id];
 
-		GeometryFrag::MaterialUBO mat_ubo;
-		GeometryFrag::MaterialCfg& mat_cfg = mat_ubo.materialCfg;
+		// GeometryFrag::MaterialUBO mat_ubo;
+		GeometryFrag::MaterialInfo& mat_info = mat_info_buf[id];
+		GeometryFrag::MaterialCfg& mat_cfg = mat_info.materialCfg;
 		mat_cfg.baseColorFactor = vec4_to_array(mat_meta.base_color_factor);
 		mat_cfg.mrnoFactor[0] = mat_meta.metallic_factor;
 		mat_cfg.mrnoFactor[1] = mat_meta.roughness_factor;
@@ -72,8 +76,8 @@ void MaterialManager::bindless_build() {
 		mat_cfg.flipNormal = mat_meta.double_sided ? 1 : 0;
 		mat_cfg.unlit = mat_meta.unlit ? 1 : 0;
 
-		GeometryFrag::TextureIds& tex_ids = mat_ubo.textureIds;
-		GeometryFrag::SamplerIds& samp_ids = mat_ubo.samplerIds;
+		GeometryFrag::TextureIds& tex_ids = mat_info.textureIds;
+		GeometryFrag::SamplerIds& samp_ids = mat_info.samplerIds;
 
 		int bc_id = mat_meta.base_color.id;
 		if (bc_id < 0) {
@@ -117,8 +121,9 @@ void MaterialManager::bindless_build() {
 
 		int occ_id = mat_meta.occlusion.id; assert(occ_id == INVALID_MANAGER_HANDLE_ID);
 
-		_mat_ubos->set(id, mat_ubo);
+		// _mat_ubos->set(id, mat_info);
 	}
+	_mat_ssbo->full_sync_write(mat_info_buf);
 
 	// binding 1 -- images
 	std::vector<otcv::Image*> imgs;

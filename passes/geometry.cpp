@@ -15,7 +15,7 @@ GeometryPass::GeometryPass(const PassConfig& cfg) {
 		{pack(DescriptorSetRate::PerObject, 1), n_renderables}
 	};
 	std::map<uint32_t, uint32_t> fs_indexing_limits = {
-		{pack(DescriptorSetRate::PerMaterial, 0), n_materials},
+		{pack(DescriptorSetRate::PerMaterial, 0), n_materials}, // This hint is not necessary since materials buffer is now an SSBO
 		{pack(DescriptorSetRate::PerMaterial, 1), n_images},
 		{pack(DescriptorSetRate::PerMaterial, 2), n_samplers}
 	};
@@ -65,12 +65,18 @@ GeometryPass::GeometryPass(const PassConfig& cfg) {
 	// bind material descriptor set
 	{
 		_material_desc_set = _desc_pool->allocate(set_layouts[DescriptorSetRate::PerMaterial]);
-		auto ubo_arr = _res->material_mgr->_mat_ubos;
-		_material_desc_set->bind_buffer_array(0, ubo_arr->_buf, 0, ubo_arr->_stride, ubo_arr->_n_ubos);
+		// auto ubo_arr = _res->material_mgr->_mat_ubos;
+		auto mat_ssbo = _res->material_mgr->_mat_ssbo;
+		// _material_desc_set->bind_buffer_array(0, ubo_arr->_buf, 0, ubo_arr->_stride, ubo_arr->_n_ubos);
+		_material_desc_set->bind_buffer(0, mat_ssbo->_buf);
 		std::vector<Image*>& imgs = _res->material_mgr->_imgs;
-		_material_desc_set->bind_sampled_image(1, imgs.data(), 0, imgs.size());
+		if (!imgs.empty()) {
+			_material_desc_set->bind_sampled_image(1, imgs.data(), 0, imgs.size());
+		}
 		std::vector<Sampler*>& samps = _res->material_mgr->_samps;
-		_material_desc_set->bind_sampler(2, samps.data(), 0, samps.size());
+		if (!samps.empty()) {
+			_material_desc_set->bind_sampler(2, samps.data(), 0, samps.size());
+		}
 	}
 }
 
@@ -99,6 +105,10 @@ void GeometryPass::commands(CommandContext& ctx) {
 		ctx.cmd_buf->cmd_bind_graphics_pipeline(gp);
 
 		RenderQueue::PipelineVariant pv = p.first;
+		if (!_res->render_queue->has(RenderQueue::PassType::Opaque, pv)) {
+			continue;
+		}
+
 		RenderQueue::OrderRange renderable_range = _res->render_queue->range_of(RenderQueue::PassType::Opaque, pv); // the start index of this specific type of renderable
 		uint32_t count_index = _res->render_queue->range_index_of(RenderQueue::PassType::Opaque, pv);
 		ctx.cmd_buf->cmd_draw_indexed_indirect_count(

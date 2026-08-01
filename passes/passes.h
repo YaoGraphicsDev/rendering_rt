@@ -5,3 +5,6 @@
 #include "post_processing.h"
 #include "shadow_mapping.h"
 #include "light_clustering.h"
+#include "ray_generation.h"
+#include "ray_query_direct.h"
+#include "irradiance_fields.h"

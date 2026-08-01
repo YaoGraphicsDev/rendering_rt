@@ -51,3 +51,8 @@ glm::vec4 encode_proj(const glm::mat4& proj);
 glm::mat4 encoded_persp_proj_inv(glm::vec4 enc);
 
 glm::mat4 encoded_ortho_proj_inv(glm::vec4 enc);
+
+// https://pbr-book.org/4ed/Sampling_Algorithms/Sampling_Multidimensional_Functions#UniformlySamplingHemispheresandSpheres
+glm::vec2 sample_uniform_square();
+glm::vec3 sample_uniform_sphere();
+glm::mat3 random_rotation();

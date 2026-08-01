@@ -50,6 +50,8 @@ target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/passes")
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_BINARY_DIR}/include")
 
+message(STATUS "XXXXXXXXXXXXX = ${CMAKE_BINARY_DIR}/include")
+
 #configure OTCV
 set(OTCV_SPIRV_CROSS_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../Libraries/SPIRV-Cross")
 set(OTCV_GLFW_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../Libraries/glfw-3.4.bin.WIN64")

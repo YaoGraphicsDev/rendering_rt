@@ -715,6 +715,7 @@ static bool load_node(int node_id, SceneNodeHandle parent_snh) {
 	// parse primitives
 	if (node.mesh >= 0) {
 		for (int prim_id = 0; prim_id < model.meshes.at(node.mesh).primitives.size(); ++prim_id) {
+			// TODO: a mesh may be referenced by multiple scene nodes. Loading scene nodes this way may produce duplicated mesh data 
 			snm.renderables.emplace_back();
 			if (!load_primitive(node.mesh, prim_id, snm.renderables.back())) {
 				std::cout << "error loading primitive. node id = " << node_id << std::endl;

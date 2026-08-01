@@ -104,6 +104,7 @@ public:
 		/*
 		* The reason why I picked UBO arrays for model matrices and materials is that 1 indirect draw call (invocation group) will only access 1 model matrix and 1 material,
 		* there is no divergent access, indices are dynamically uniform. Drivers can handle UBO access of that nature pretty well.
+		* In comparison material buffer for ray tracing pipeline is constructed as SSBO, because accesses are completely random
 		* Also UBO is visible to host, which makes it straightforward to update so why not.
 		* 
 		* Lights are different. Deferred lighting pass draws every texel on screen in one draw call. The indices of lights that a texel accesses may vary across different texels.
@@ -115,11 +116,7 @@ public:
 		// TODO: Put model matrices and material ids in one UBO
 		std::shared_ptr<otcv::StaticUBOArray<GeometryVert::ModelMatUBO>>	model_mats = nullptr;
 		std::shared_ptr<otcv::StaticUBOArray<GeometryVert::MatIdUBO>>		mat_ids = nullptr;
-		// std::shared_ptr<otcv::StaticUBOArray>	lights = nullptr;
-		std::shared_ptr<otcv::StagedWriteSSBO<PbrFrag::LightBuffer>>	lights = nullptr;
+		std::shared_ptr<otcv::SSBO<PbrFrag::LightBuffer>>	lights = nullptr;			
 	};
 	std::vector<PerFrameBOs>	_per_frame_bos;	// one for each frame-in-flight
-
-	// Has to match those in the shaders
-	// const uint32_t _max_area_light_vertices = 8;
 };

@@ -24,6 +24,17 @@ public:
 		DoubleSided,
 		Count
 	};
+	bool has(PassType pt, PipelineVariant pv) {
+		if (_order_range_map.count(pt) == 0) {
+			return false;
+		}
+		if (_order_range_map.at(pt).count(pv) == 0) {
+			return false;
+		}
+		else {
+			return true;
+		}
+	}
 	struct OrderRange {
 		// indices of _renderable_order
 		uint32_t start;

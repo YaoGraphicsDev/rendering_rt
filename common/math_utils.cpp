@@ -1,6 +1,9 @@
 #include "math_utils.h"
 
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <random>
 
 glm::vec3 FrustumUtils::ndc_to_world(glm::vec3 ndc, glm::mat4 proj_inv, glm::mat4 view_inv) {
 	glm::vec4 view_space_coord = proj_inv * glm::vec4(ndc, 1.0f);
@@ -207,4 +210,46 @@ glm::mat4 encoded_ortho_proj_inv(glm::vec4 enc) {
 	inv[2][2] = enc.w / enc.z;
 	inv[3][2] = -enc.w;
 	return inv;
+}
+
+static std::mt19937 rng{ std::random_device{}() };
+static std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+glm::vec2 sample_uniform_square() {
+	return { dist(rng), dist(rng) };
+}
+
+glm::vec3 sample_uniform_sphere() {
+	glm::vec2 u = sample_uniform_square();
+	float z = 1 - 2 * u[0];
+	float r = glm::sqrt(1 - z * z);
+	float phi = 2 * glm::pi<float>() * u[1];
+	return { r * std::cos(phi), r * std::sin(phi), z };
+}
+
+// this is not correct. Generates random "pitch" and "yaw". No "roll" around axis
+//glm::mat3 random_rotation() {
+//	glm::vec3 v = sample_uniform_sphere();
+//	glm::quat q = glm::rotation(glm::vec3(0.0f, 0.0f, 1.0f), v);
+//	glm::mat4 m = glm::toMat4(q);
+//	return m;
+//}
+
+glm::mat3 random_rotation()
+{
+	float u1 = dist(rng);
+	float u2 = dist(rng);
+	float u3 = dist(rng);
+
+	float a = glm::two_pi<float>() * u2;
+	float b = glm::two_pi<float>() * u3;
+
+	glm::quat q{
+		std::sqrt(u1) * std::cos(b),       // w
+		std::sqrt(1.0f - u1) * std::sin(a), // x
+		std::sqrt(1.0f - u1) * std::cos(a), // y
+		std::sqrt(u1) * std::sin(b)         // z
+	};
+
+	return glm::mat3_cast(q);
 }
