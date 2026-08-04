@@ -18,16 +18,12 @@ ToneMapping::ToneMapping(const PassConfig& cfg) {
 		.add_dynamic_state(VK_DYNAMIC_STATE_SCISSOR)
 		.build();
 	_desc_pool.reset(new NaiveExpandableDescriptorPool);
-	_sampler_hdr = SamplerBuilder().filter(VK_FILTER_NEAREST, VK_FILTER_NEAREST).build();
-	_desc_set = _desc_pool->allocate(_pipeline->desc_set_layouts.at(DescriptorSetRate::PerFrame));
-	_desc_set->bind_sampler(0, &_sampler_hdr);
 }
 
 ToneMapping::~ToneMapping() {
 	unload_shader_blob(_shader_blob);
 	_screen_quad_vb->destroy();
 	_pipeline->destroy();
-	_sampler_hdr->destroy();
 }
 
 void ToneMapping::command(CommandContext& ctx) {
@@ -35,7 +31,6 @@ void ToneMapping::command(CommandContext& ctx) {
 	ctx.cmd_buf->cmd_set_scissor(ctx.width, ctx.height);
 	ctx.cmd_buf->cmd_bind_vertex_buffer(_screen_quad_vb);
 	ctx.cmd_buf->cmd_bind_graphics_pipeline(_pipeline);
-	ctx.cmd_buf->cmd_bind_descriptor_set(_pipeline, _desc_set, DescriptorSetRate::PerFrame);
 	ctx.cmd_buf->cmd_bind_descriptor_set(_pipeline, ctx.fg_set, DescriptorSetRate::FrameGraph);
 	ctx.cmd_buf->cmd_draw(3, 1, 0, 0); // screen quad convention
 }

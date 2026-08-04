@@ -29,7 +29,4 @@ private:
 	otcv::VertexBuffer*						_screen_quad_vb;
 	otcv::GraphicsPipeline*					_pipeline;
 	std::shared_ptr<otcv::NaiveExpandableDescriptorPool> _desc_pool = nullptr;
-
-	otcv::Sampler*							_sampler_hdr;
-	otcv::DescriptorSet*					_desc_set;
 };
