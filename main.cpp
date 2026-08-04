@@ -24,12 +24,12 @@ struct LightClusterParams {
 };
 
 struct IrradianceFieldParams {
-    static constexpr glm::vec3 probe_start = glm::vec3(-13.536581, -1.448367, -6.451657);
-    static constexpr glm::vec3 probe_step = glm::vec3(1.804877, 0.87827, 1.929566);
+    static constexpr glm::vec3 probe_start = glm::vec3(-12.342812, -0.349566, -5.74974);
+    static constexpr glm::vec3 probe_step = glm::vec3(1.619833, 0.770781, 1.665149);
     // The number give by DDGI was 64. At that rate, sample rays may miss some high frequency details around it..
     // Take sponza for example, probes hiding in shadows on the second floor looking down on the well lit atrium below. Lots of hight frequency dark & lit details on it
-    static constexpr uint32_t rays_per_probe = 256; 
-    static constexpr glm::ivec3 probe_counts = glm::ivec3(16, 16, 16);
+    static constexpr uint32_t rays_per_probe = 192; 
+    static constexpr glm::ivec3 probe_counts = glm::ivec3(16, 16, 8);
     static constexpr uint32_t n_probes = probe_counts.x * probe_counts.y * probe_counts.z;
     static constexpr float depth_sharpness = 50.0f;
     static constexpr float hysteresis = 0.98f;
@@ -144,6 +144,11 @@ int main() {
         fg::ResourceHandle g_indirect_counts_zero = fg->add_resource("GIndirectCountZeros", indirect_count_builder);
         fg::ResourceHandle g_indirect_cmds_filled = fg->add_resource("GIndirectCmdsFilled", indirect_cmd_builder);
         fg::ResourceHandle g_indirect_counts_filled = fg->add_resource("GIndirectCountFilled", indirect_count_builder);
+
+        fg::ResourceHandle g_position = fg->add_resource("GPosition",
+            ImageBuilder()
+            .size(window_width, window_height, 1)
+            .format(VK_FORMAT_R16G16B16A16_SFLOAT));
 
         fg::ResourceHandle g_albedo = fg->add_resource("GAlbedo",
             ImageBuilder()
@@ -264,8 +269,9 @@ int main() {
             cfg.res_context = res_ctx;
             cfg.shader_dir = "./spirv/geometry_pass/";
             cfg.color_attachment_formats = {
-                fg->get_img_builder(g_albedo)._image_info.format,
+                fg->get_img_builder(g_position)._image_info.format,
                 fg->get_img_builder(g_normal)._image_info.format,
+                fg->get_img_builder(g_albedo)._image_info.format,
                 fg->get_img_builder(g_metallic_roughness)._image_info.format,
                 fg->get_img_builder(g_emissive)._image_info.format,
                 fg->get_img_builder(g_mat_flags)._image_info.format };
@@ -275,12 +281,16 @@ int main() {
             fg::Pass& g_pass = fg->add_pass("Geometry", fg::PassType::Graphics);
             g_pass.access(fg::ResourceAccessType::IndirectIn, g_indirect_cmds_filled);
             g_pass.access(fg::ResourceAccessType::IndirectIn, g_indirect_counts_filled);
-            g_pass.access(fg::ResourceAccessType::ColorOut, g_albedo);
-            g_pass.store_load_func(g_albedo, [](RenderingBegin::Attachment& attachment) {
+            g_pass.access(fg::ResourceAccessType::ColorOut, g_position);
+            g_pass.store_load_func(g_position, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
             });
             g_pass.access(fg::ResourceAccessType::ColorOut, g_normal);
             g_pass.store_load_func(g_normal, [](RenderingBegin::Attachment& attachment) {
+                attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
+            });
+            g_pass.access(fg::ResourceAccessType::ColorOut, g_albedo);
+            g_pass.store_load_func(g_albedo, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
             });
             g_pass.access(fg::ResourceAccessType::ColorOut, g_metallic_roughness);
@@ -524,7 +534,18 @@ int main() {
             ImageBuilder()
             .size(window_width, window_height, 1)
             .format(VK_FORMAT_R16G16B16A16_SFLOAT));
-        
+        fg::ResourceHandle rt_ray_hit_albedo = fg->add_resource("RTRayHitAlbedo",
+            ImageBuilder()
+            .size(window_width, window_height, 1)
+            // storage images cant be srgb format. We have to go linear. Use floating point format to mitigate precision loss.
+            // Dont use full-blown RGB16_SRGB format. Use short floating point to save on space
+            // Downside being no alpha support. We dont need that for albedo buffer for now anyway
+            .format(VK_FORMAT_B10G11R11_UFLOAT_PACK32));
+        fg::ResourceHandle rt_ray_hit_metallic_roughness = fg->add_resource("RTRayHitMetallicRoughness",
+            fg->get_img_builder(g_metallic_roughness)
+            .size(window_width, window_height, 1));
+
+
         // full screen ray generation pass
         {
             RayGeneration::PassConfig cfg;
@@ -558,18 +579,20 @@ int main() {
             ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_location);
             ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_radiance);
             ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_normal);
+            ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_albedo);
+            ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_metallic_roughness);
             ray_query_pass.execute_func([app, rq, &cam, window_width, window_height](CommandBuffer* cmd, fg::PassContext& ctx) {
                 RayQueryDirect::CommandContext rq_ctx;
                 rq_ctx.cmd_buf = cmd;
                 rq_ctx.fg_set = ctx.desc_set;
-                rq_ctx.fg_frame_id = app->current_frame();
+                rq_ctx.fg_frame_id = app->frame_slot();
                 rq_ctx.width = window_width;
                 rq_ctx.height = window_height;
                 rq->commands(rq_ctx);
             });
         }
         */
-
+        
         
         fg::ResourceHandle rt_ray_origin = fg->add_resource("RTRayOrigin",
             ImageBuilder()
@@ -580,17 +603,26 @@ int main() {
             .size(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes, 1)
             .format(VK_FORMAT_R16G16B16A16_SFLOAT));
         fg::ResourceHandle rt_ray_hit_location = fg->add_resource("RTRayHitLocation",
+            fg->get_img_builder(g_position)
+            .size(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes, 1));
+        fg::ResourceHandle rt_ray_hit_radiance_direct = fg->add_resource("RTRayHitRadiance",
             ImageBuilder()
             .size(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes, 1)
             .format(VK_FORMAT_R16G16B16A16_SFLOAT));
-        fg::ResourceHandle rt_ray_hit_radiance = fg->add_resource("RTRayHitRadiance",
-            ImageBuilder()
-            .size(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes, 1)
-            .format(VK_FORMAT_R16G16B16A16_SFLOAT));
+        fg::ResourceHandle rt_ray_hit_radiance_full = fg->version_resource(rt_ray_hit_radiance_direct);
         fg::ResourceHandle rt_ray_hit_normal = fg->add_resource("RTRayHitNormal",
+            fg->get_img_builder(g_normal)
+            .size(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes, 1));
+        fg::ResourceHandle rt_ray_hit_albedo = fg->add_resource("RTRayHitAlbedo",
             ImageBuilder()
             .size(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes, 1)
-            .format(VK_FORMAT_R16G16B16A16_SFLOAT));
+            // storage images cant be srgb format. We have to go linear. Use floating point format to mitigate precision loss.
+            // Dont use full-blown RGB16_SRGB format. Use short floating point to save on space
+            // Downside being no alpha support. We dont need that for albedo buffer for now anyway
+            .format(VK_FORMAT_B10G11R11_UFLOAT_PACK32)); 
+        fg::ResourceHandle rt_ray_hit_metallic_roughness = fg->add_resource("RTRayHitMetallicRoughness",
+            fg->get_img_builder(g_metallic_roughness)
+            .size(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes, 1));
 
         // probe field ray generation pass
         {
@@ -608,7 +640,6 @@ int main() {
                 rg_ctx.fg_set = ctx.desc_set;
                 rg_ctx.probe_start = IrradianceFieldParams::probe_start;
                 rg_ctx.probe_step = IrradianceFieldParams::probe_step;
-                // rg_ctx.probe_orientation = glm::identity<glm::mat3>();
                 rg_ctx.probe_orientation = random_rotation();
                 rg_ctx.rays_per_probe = IrradianceFieldParams::rays_per_probe;
                 rg_ctx.probe_counts = IrradianceFieldParams::probe_counts;
@@ -616,7 +647,7 @@ int main() {
             });
         }
 
-        // ray query pass
+        // direct ray query pass
         {
             RayQueryDirect::PassConfig cfg;
             cfg.res_context = res_ctx;
@@ -627,8 +658,10 @@ int main() {
             ray_query_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_origin);
             ray_query_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_direction);
             ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_location);
-            ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_radiance);
+            ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_radiance_direct);
             ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_normal);
+            ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_albedo);
+            ray_query_pass.access(fg::ResourceAccessType::StorageImageOut, rt_ray_hit_metallic_roughness);
             ray_query_pass.execute_func([app, rq, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
                 RayQueryDirect::CommandContext rq_ctx;
                 rq_ctx.cmd_buf = cmd;
@@ -637,6 +670,86 @@ int main() {
                 rq_ctx.width = IrradianceFieldParams::rays_per_probe;
                 rq_ctx.height = IrradianceFieldParams::n_probes;
                 rq->commands(rq_ctx);
+            });
+        }
+
+        // TODO: remember to destroy these
+        Image* irrad_atlas_0 = ImageBuilder()
+            .size(IrradianceFieldParams::atlas_size_irrad.x, IrradianceFieldParams::atlas_size_irrad.y, 1)
+            .format(IrradianceFieldParams::irrad_atlas_format)
+            .usage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+            .build();
+        fg::ResourceHandle irrad_atlas_0_hist = fg->import_resource("IrradAtlas0Hist", irrad_atlas_0);
+        fg::ResourceHandle irrad_atlas_0_in = fg->import_resource("IrradAtlas0", irrad_atlas_0);
+        fg::ResourceHandle irrad_atlas_0_out = fg->version_resource(irrad_atlas_0_in);
+
+        Image* irrad_atlas_1 = ImageBuilder(irrad_atlas_0->builder).build();
+        fg::ResourceHandle irrad_atlas_1_hist = fg->import_resource("IrradAtlas1Hist", irrad_atlas_1);
+        fg::ResourceHandle irrad_atlas_1_in = fg->import_resource("IrradAtlas1", irrad_atlas_1);
+        fg::ResourceHandle irrad_atlas_1_out = fg->version_resource(irrad_atlas_1_in);
+
+        Image* depth_atlas_0 = ImageBuilder()
+            .size(IrradianceFieldParams::atlas_size_depth.x, IrradianceFieldParams::atlas_size_depth.y, 1)
+            .format(IrradianceFieldParams::depth_atlas_format)
+            .usage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+            .build();
+        fg::ResourceHandle depth_atlas_0_hist = fg->import_resource("DepthAtlas0Hist", depth_atlas_0);
+        fg::ResourceHandle depth_atlas_0_in = fg->import_resource("DepthAtlas0", depth_atlas_0);
+        fg::ResourceHandle depth_atlas_0_out = fg->version_resource(depth_atlas_0_in);
+
+        Image* depth_atlas_1 = ImageBuilder(depth_atlas_0->builder).build();
+        fg::ResourceHandle depth_atlas_1_hist = fg->import_resource("DepthAtlas1Hist", depth_atlas_1);
+        fg::ResourceHandle depth_atlas_1_in = fg->import_resource("IrradAtlas1", depth_atlas_1);
+        fg::ResourceHandle depth_atlas_1_out = fg->version_resource(depth_atlas_1_in);
+
+        IrradianceFields::PassConfig cfg;
+        cfg.shader_dir = "./spirv/irradiance_field/";
+        cfg.probe_counts = IrradianceFieldParams::probe_counts;
+        cfg.probe_size_irrad = IrradianceFieldParams::probe_size_irrad;
+        cfg.probe_size_depth = IrradianceFieldParams::probe_size_depth;
+        cfg.probe_start = IrradianceFieldParams::probe_start;
+        cfg.probe_step = IrradianceFieldParams::probe_step;
+        cfg.rays_per_probe = IrradianceFieldParams::rays_per_probe;
+        cfg.depth_sharpness = IrradianceFieldParams::depth_sharpness;
+        cfg.hysteresis = IrradianceFieldParams::hysteresis;
+        assert(fg->get_img_builder(lit)._image_info.format == fg->get_img_builder(rt_ray_hit_radiance_direct)._image_info.format);
+        cfg.direct_lit_format = fg->get_img_builder(lit)._image_info.format;
+        cfg.visualize_probes = true;
+        cfg.probe_visualize_color_format = fg->get_img_builder(lit)._image_info.format;
+        cfg.probe_visualize_depth_format = fg->get_img_builder(g_depth)._image_info.format;
+        std::shared_ptr<IrradianceFields> rf = std::make_shared<IrradianceFields>(cfg);
+
+        // indirect lighting for ray query result
+        {
+            fg::Pass& indirect_lighting_pass = fg->add_pass("ProbeIndirect", fg::PassType::Graphics);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_location);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_normal);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_albedo);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_metallic_roughness);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, irrad_atlas_0_hist);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, irrad_atlas_1_hist);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, depth_atlas_0_hist);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, depth_atlas_1_hist);
+            indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_origin);
+            indirect_lighting_pass.access(fg::ResourceAccessType::ColorInOut, rt_ray_hit_radiance_direct, rt_ray_hit_radiance_full);
+            indirect_lighting_pass.store_load_func(lit, [](RenderingBegin::Attachment& attachment) {
+                // attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f); // temporary. Just to show indirect lighting
+                attachment.load_store(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE);
+            });
+            indirect_lighting_pass.render_area_func([](RenderingBegin& begin) {
+                begin.area(IrradianceFieldParams::rays_per_probe, IrradianceFieldParams::n_probes);
+            });
+            indirect_lighting_pass.execute_func([app, rf, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
+                IrradianceFields::SampleFieldsContext sf_ctx;
+                sf_ctx.cmd_buf = cmd;
+                sf_ctx.fg_set = ctx.desc_set;
+                sf_ctx.cam = cam;
+                sf_ctx.normal_bias = 0.05f;
+                sf_ctx.sample_atlas_index = (app->frame_count() + 1) % 2; // sample from atlas 1, from last frame
+                sf_ctx.width = IrradianceFieldParams::rays_per_probe;
+                sf_ctx.height = IrradianceFieldParams::n_probes;
+                sf_ctx.view_type = IrradianceFields::ViewType::FromProbe;
+                rf->sample_fields_commands(sf_ctx);
             });
         }
 
@@ -656,32 +769,6 @@ int main() {
         fg::ResourceHandle lit_indirect = fg->add_resource("LitIndirect", fg->get_img_builder(lit)); //fg->add_resource("LitGI", fg->get_img_builder(lit));
         // direct + indirect
         fg::ResourceHandle lit_full = fg->version_resource(lit);
-
-
-        // TODO: remember to destroy these
-        Image* irrad_atlas_0 = ImageBuilder()
-            .size(IrradianceFieldParams::atlas_size_irrad.x, IrradianceFieldParams::atlas_size_irrad.y, 1)
-            .format(IrradianceFieldParams::irrad_atlas_format)
-            .usage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
-            .build();
-        fg::ResourceHandle irrad_atlas_0_in = fg->import_resource("IrradAtlas0", irrad_atlas_0);
-        fg::ResourceHandle irrad_atlas_0_out = fg->version_resource(irrad_atlas_0_in);
-
-        Image* irrad_atlas_1 = ImageBuilder(irrad_atlas_0->builder).build();
-        fg::ResourceHandle irrad_atlas_1_in = fg->import_resource("IrradAtlas1", irrad_atlas_1);
-        fg::ResourceHandle irrad_atlas_1_out = fg->version_resource(irrad_atlas_1_in);
-
-        Image* depth_atlas_0 = ImageBuilder()
-            .size(IrradianceFieldParams::atlas_size_depth.x, IrradianceFieldParams::atlas_size_depth.y, 1)
-            .format(IrradianceFieldParams::depth_atlas_format)
-            .usage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
-            .build();
-        fg::ResourceHandle depth_atlas_0_in = fg->import_resource("DepthAtlas0", depth_atlas_0);
-        fg::ResourceHandle depth_atlas_0_out = fg->version_resource(depth_atlas_0_in);
-
-        Image* depth_atlas_1 = ImageBuilder(depth_atlas_0->builder).build();
-        fg::ResourceHandle depth_atlas_1_in = fg->import_resource("IrradAtlas1", depth_atlas_1);
-        fg::ResourceHandle depth_atlas_1_out = fg->version_resource(depth_atlas_1_in);
         
         //Image* depth_atlas_0 = ImageBuilder()
         //    .size(IrradianceFieldParams::atlas_size_depth.x, IrradianceFieldParams::atlas_size_depth.y, 1)
@@ -695,21 +782,6 @@ int main() {
 
         // DDGI passes
         {
-            IrradianceFields::PassConfig cfg;
-            cfg.shader_dir = "./spirv/irradiance_field/";
-            cfg.probe_counts = IrradianceFieldParams::probe_counts;
-            cfg.probe_size_irrad = IrradianceFieldParams::probe_size_irrad;
-            cfg.probe_size_depth = IrradianceFieldParams::probe_size_depth;
-            cfg.probe_start = IrradianceFieldParams::probe_start;
-            cfg.probe_step = IrradianceFieldParams::probe_step;
-            cfg.rays_per_probe = IrradianceFieldParams::rays_per_probe;
-            cfg.depth_sharpness = IrradianceFieldParams::depth_sharpness;
-            cfg.hysteresis = IrradianceFieldParams::hysteresis;
-            cfg.direct_lit_format = fg->get_img_builder(lit)._image_info.format;
-            cfg.visualize_probes = true;
-            cfg.probe_visualize_color_format = fg->get_img_builder(lit)._image_info.format;
-            cfg.probe_visualize_depth_format = fg->get_img_builder(g_depth)._image_info.format;
-            std::shared_ptr<IrradianceFields> rf = std::make_shared<IrradianceFields>(cfg);
 
             // irradiance update
             {
@@ -717,7 +789,7 @@ int main() {
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_origin);
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_direction);
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_location);
-                probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_radiance);
+                probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_radiance_full);
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_normal);
                 probe_update_pass.access(fg::ResourceAccessType::StorageImageInOut, irrad_atlas_0_in, irrad_atlas_0_out);
                 probe_update_pass.access(fg::ResourceAccessType::StorageImageInOut, irrad_atlas_1_in, irrad_atlas_1_out);
@@ -764,7 +836,7 @@ int main() {
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_origin);
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_direction);
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_location);
-                probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_radiance);
+                probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_radiance_full);
                 probe_update_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_normal);
                 probe_update_pass.access(fg::ResourceAccessType::StorageImageInOut, depth_atlas_0_in, depth_atlas_0_out);
                 probe_update_pass.access(fg::ResourceAccessType::StorageImageInOut, depth_atlas_1_in, depth_atlas_1_out);
@@ -807,16 +879,16 @@ int main() {
 
             // indirect lighting
             {
-                fg::Pass& indirect_lighting_pass = fg->add_pass("IndirectLighting", fg::PassType::Graphics);
-                indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, g_depth);
-                indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, g_albedo);
+                fg::Pass& indirect_lighting_pass = fg->add_pass("LightingIndirect", fg::PassType::Graphics);
+                indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, g_position);
                 indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, g_normal);
+                indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, g_albedo);
                 indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, g_metallic_roughness);
                 indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, irrad_atlas_0_out);
                 indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, irrad_atlas_1_out);
                 indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, depth_atlas_0_out);
                 indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, depth_atlas_1_out);
-                // indirect_lighting_pass.access(fg::ResourceAccessType::ColorOut, lit_indirect);
+                indirect_lighting_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_origin);
                 indirect_lighting_pass.access(fg::ResourceAccessType::ColorInOut, lit, lit_full);
 
                 indirect_lighting_pass.store_load_func(lit, [](RenderingBegin::Attachment& attachment) {
@@ -835,6 +907,7 @@ int main() {
                     sf_ctx.sample_atlas_index = (app->frame_count() + 1) % 2; // sample from atlas 1
                     sf_ctx.width = window_width;
                     sf_ctx.height = window_height;
+                    sf_ctx.view_type = IrradianceFields::ViewType::FromCamera;
                     rf->sample_fields_commands(sf_ctx);
                 });
             }

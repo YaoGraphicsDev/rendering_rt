@@ -54,12 +54,18 @@ public:
 	};
 	void visualize_probes_commands(VisualizeProbesContext& ctx);
 
+	enum class ViewType {
+		FromCamera = 0,
+		FromProbe
+	};
+
 	struct SampleFieldsContext {
 		otcv::CommandBuffer*	cmd_buf = nullptr;
 		otcv::DescriptorSet*	fg_set = nullptr;
 		std::shared_ptr<PerspectiveCamera> cam;
 		float					normal_bias = 0.05f;
 		uint32_t				sample_atlas_index;
+		ViewType				view_type;
 
 		float width;
 		float height;

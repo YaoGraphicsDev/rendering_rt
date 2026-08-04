@@ -153,15 +153,16 @@ void IrradianceFields::sample_fields_commands(SampleFieldsContext& ctx) {
 	pc.projEncoded = vec4_to_array(ctx.cam->proj_enc);
 	pc.viewBaseQuat = vec4_to_array(ctx.cam->view_base_quat);
 	pc.camPos = vec3_to_array(ctx.cam->eye);
-	pc.probeStart = vec3_to_array(_cfg.probe_start);
-	pc.probeStep = vec3_to_array(_cfg.probe_step);
-	pc.irradAtlasSize = vec2_to_array(glm::ivec2(_irrad_atlas_size));
-	pc.irradProbeSize = _cfg.probe_size_irrad;
-	pc.depthAtlasSize = vec2_to_array(glm::ivec2(_depth_atlas_size));
-	pc.depthProbeSize = _cfg.probe_size_depth;
-	pc.probeCounts = vec3_to_array(glm::ivec3(_cfg.probe_counts));
+	pc.ddgi_params.probeStart = vec3_to_array(_cfg.probe_start);
+	pc.ddgi_params.probeStep = vec3_to_array(_cfg.probe_step);
+	pc.ddgi_params.irradAtlasSize = vec2_to_array(glm::ivec2(_irrad_atlas_size));
+	pc.ddgi_params.irradProbeSize = _cfg.probe_size_irrad;
+	pc.ddgi_params.depthAtlasSize = vec2_to_array(glm::ivec2(_depth_atlas_size));
+	pc.ddgi_params.depthProbeSize = _cfg.probe_size_depth;
+	pc.ddgi_params.probeCounts = vec3_to_array(glm::ivec3(_cfg.probe_counts));
 	pc.normalBias = ctx.normal_bias;
 	pc.sampleAtlasIndex = ctx.sample_atlas_index;
+	pc.viewType = uint32_t(ctx.view_type);
 	ctx.cmd_buf->cmd_push_constant(_sample_fields_pipeline, pc, VK_SHADER_STAGE_FRAGMENT_BIT);
 	ctx.cmd_buf->cmd_draw(3, 1, 0, 0); // screen quad convention
 }

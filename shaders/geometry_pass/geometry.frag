@@ -3,16 +3,18 @@
 #extension GL_EXT_samplerless_texture_functions : require
 #extension GL_GOOGLE_include_directive : require
 
-layout(location = 0) in vec3 inWorldNormal;
-layout(location = 1) in vec2 inUV;				// only one set of UV for now
-layout(location = 2) in vec4 inWorldTangent;
-layout(location = 3) flat in int inMaterialId;
+layout(location = 0) in vec3 inWorldPosition;
+layout(location = 1) in vec3 inWorldNormal;
+layout(location = 2) in vec2 inUV;				// only one set of UV for now
+layout(location = 3) in vec4 inWorldTangent;
+layout(location = 4) flat in int inMaterialId;
 
-layout(location = 0) out vec4 outAlbedo;
+layout(location = 0) out vec4 outPosition;
 layout(location = 1) out vec4 outNormal;
-layout(location = 2) out vec4 outMetallicRoughness;
-layout(location = 3) out vec4 outEmissive;
-layout(location = 4) out uint outMatFlags;
+layout(location = 2) out vec4 outAlbedo;
+layout(location = 3) out vec4 outMetallicRoughness;
+layout(location = 4) out vec4 outEmissive;
+layout(location = 5) out uint outMatFlags;
 
 #include "types.glsl" //! #include "../common/types.glsl"
 
@@ -28,6 +30,8 @@ void main() {
 		// not a valid material
 		discard;
 	}
+	
+	outPosition = vec4(inWorldPosition,1.0);
 
     MaterialCfg cfg = materials[inMaterialId].materialCfg;
     TextureIds texIds = materials[inMaterialId].textureIds;

@@ -14,5 +14,5 @@ void main() {
     vec3 hdr = texture(sampler2D(texHDR, samplerHDR), inUV).rgb;
     hdr = max(hdr, vec3(0.0f));
     // reinhard tone mapping
-    outLDR = vec4(hdr / (hdr + vec3(1.0)), 1.0f);
+    outLDR = vec4(pow(hdr / (hdr + vec3(1.0)), vec3(0.75)), 1.0f);
 }

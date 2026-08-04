@@ -7,10 +7,11 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec4 inTangent;
 
-layout(location = 0) out vec3 outWorldNormal;
-layout(location = 1) out vec2 outUV;
-layout(location = 2) out vec4 outWorldTangent;
-layout(location = 3) flat out int outMaterialId;
+layout(location = 0) out vec3 outWorldPosition;
+layout(location = 1) out vec3 outWorldNormal;
+layout(location = 2) out vec2 outUV;
+layout(location = 3) out vec4 outWorldTangent;
+layout(location = 4) flat out int outMaterialId;
 
 layout (push_constant) uniform PushConstants {
 	mat4 projectView;
@@ -27,7 +28,9 @@ void main() {
 	uint objId = gl_BaseInstance;
 
 	mat4 objModelMat = mmUbos[objId].model;
-	gl_Position = consts.projectView * objModelMat * vec4(inPosition, 1.0f);
+	vec4 worldPosition = objModelMat * vec4(inPosition, 1.0f);
+	gl_Position = consts.projectView * worldPosition;
+	outWorldPosition = vec3(worldPosition);
 	outWorldNormal = normalize(inverse(transpose(mat3(objModelMat))) * vec3(inNormal));
 	outUV = inUV;
 	vec3 worldTangent = normalize(mat3(objModelMat) * vec3(inTangent));

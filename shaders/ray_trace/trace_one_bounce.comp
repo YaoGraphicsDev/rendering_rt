@@ -60,9 +60,12 @@ layout(set = 1, binding = 10) uniform sampler samplerRay;       // nearest
 //  binding 24 - 31:    storage image
 layout(set = 3, binding = 0) uniform texture2D texRayOrigins;
 layout(set = 3, binding = 1) uniform texture2D texRayDirections;
+
 layout(set = 3, binding = 24) uniform writeonly image2D imgRayHitLocations;
 layout(set = 3, binding = 25) uniform writeonly image2D imgRayHitRadiance;
 layout(set = 3, binding = 26) uniform writeonly image2D imgRayHitNormals;
+layout(set = 3, binding = 27) uniform writeonly image2D imgRayHitAlbedo;
+layout(set = 3, binding = 28) uniform writeonly image2D imgRayHitMetallicRoughness;
 
 // vec3 packPosition(uint id) {
 //     uint idBase = id * 3;
@@ -128,6 +131,7 @@ struct HitProfile {
     vec3 normal; // return flipped normal if a hit occurs on the backside, disregarding the flipNormal flag of material
     vec2 uv;
     vec4 albedo;
+    vec2 metallicRoughness;
     float alphaCutoff;
 };
 HitProfile hitProfile(IntersectionInfo itscInfo) {
@@ -171,6 +175,17 @@ HitProfile hitProfile(IntersectionInfo itscInfo) {
 			prof.uv);
     }
     prof.albedo = albedo * matCfg.baseColorFactor;
+
+    float metallicFactor = matCfg.mrnoFactor.x;
+	float roughnessFactor = matCfg.mrnoFactor.y;
+    if (texIds.metallicRoughnessId >= 0 && samplerIds.metallicRoughnessId >= 0) {
+	    prof.metallicRoughness = texture(sampler2D(
+			textures[texIds.metallicRoughnessId],
+			samplers[samplerIds.metallicRoughnessId]),
+			prof.uv).rg * vec2(metallicFactor, roughnessFactor);
+    } else {
+		prof.metallicRoughness = vec2(metallicFactor, roughnessFactor);
+    }
 
     if (matCfg.alphaMode == ALPHA_MODE_MASK) {
         prof.alphaCutoff = matCfg.alphaCutoff;
@@ -224,7 +239,7 @@ void main() {
         // TODO: add skybox support
         imageStore(imgRayHitLocations, ivec2(invoID), vec4(0.0));
         imageStore(imgRayHitNormals, ivec2(invoID), vec4(0.0));
-        imageStore(imgRayHitRadiance, ivec2(invoID), vec4(0.53, 0.81, 0.92, 1.0)); // temporary: sky radiance. clear overhead noon sky
+        imageStore(imgRayHitRadiance, ivec2(invoID), vec4(0.53, 0.81, 0.92, 1.0) * 10.0); // temporary: sky radiance. clear overhead noon sky
         return;
     }
     
@@ -233,6 +248,8 @@ void main() {
 
     imageStore(imgRayHitLocations, ivec2(invoID), vec4(pAtHit, 0.0));
     imageStore(imgRayHitNormals, ivec2(invoID), vec4(hitProf.normal, 0.0));
+    imageStore(imgRayHitAlbedo, ivec2(invoID), vec4(hitProf.albedo));
+    imageStore(imgRayHitMetallicRoughness, ivec2(invoID), vec4(hitProf.metallicRoughness, 0.0, 0.0));
 
     vec3 n = hitProf.normal;
     vec3 l = -normalize(consts.lightDir);
@@ -265,10 +282,14 @@ void main() {
         visibility = 1.0;
     }
 
-    // TODO: lambertian diffuse. Should also account for metallic factor: 1-metallic
-    vec3 radiance = vec3(hitProf.albedo) * invPI * consts.lightColor * consts.lightIntensity * max(0.0, dot(n, l)) * visibility; 
-    // vec3 radiance = rayDirection;
+    // lambertian diffuse. 
+    // TODO: Consider a full-blown BRDF
+    float metallic = hitProf.metallicRoughness.x;
+    vec3 albedo = vec3(hitProf.albedo);
+    vec3 F0 = vec3(0.04);
+    F0 = mix(F0, albedo, metallic);
+    vec3 radiance = vec3(1.0 - F0) * vec3(1.0 - metallic) * albedo * invPI * consts.lightColor * consts.lightIntensity * max(0.0, dot(n, l)) * visibility; 
+    // radiance = vec3(hitProf.metallicRoughness, 0.0);
     imageStore(imgRayHitRadiance, ivec2(invoID), vec4(radiance, 0.0));
-
 }
 
