@@ -140,10 +140,8 @@ int main() {
             .size(FrustumCullComp::DrawCountBuffer::ElementStride * res_ctx->render_queue->_order_ranges.size())
             .host_access(otcv::BufferBuilder::Access::Invisible);
 
-        fg::ResourceHandle g_indirect_cmds_zero = fg->add_resource("GIndirectCmdsZeros", indirect_cmd_builder);
-        fg::ResourceHandle g_indirect_counts_zero = fg->add_resource("GIndirectCountZeros", indirect_count_builder);
-        fg::ResourceHandle g_indirect_cmds_filled = fg->add_resource("GIndirectCmdsFilled", indirect_cmd_builder);
-        fg::ResourceHandle g_indirect_counts_filled = fg->add_resource("GIndirectCountFilled", indirect_count_builder);
+        fg::ResourceHandle g_indirect_cmds = fg->add_resource("GIndirectCmds", indirect_cmd_builder);
+        fg::ResourceHandle g_indirect_counts = fg->add_resource("GIndirectCount", indirect_count_builder);
 
         fg::ResourceHandle g_position = fg->add_resource("GPosition",
             ImageBuilder()
@@ -214,10 +212,8 @@ int main() {
             .size(AssignLightsComp::LightAssignmentBuffer::ElementStride * LightClusterParams::n_clusters.x * LightClusterParams::n_clusters.y * LightClusterParams::n_clusters.z)
             .host_access(otcv::BufferBuilder::Access::Invisible);
 
-        fg::ResourceHandle visible_light_ids_zero = fg->add_resource("LightIdZeros", visible_light_id_builder);
-        fg::ResourceHandle visible_light_count_zero = fg->add_resource("LightCountZero", visible_light_count_builder);
-        fg::ResourceHandle visible_light_ids_filled = fg->add_resource("LightIdFilled", visible_light_id_builder);
-        fg::ResourceHandle visible_light_count_filled = fg->add_resource("LightCountFilled", visible_light_count_builder);
+        fg::ResourceHandle visible_light_ids = fg->add_resource("LightId", visible_light_id_builder);
+        fg::ResourceHandle visible_light_count = fg->add_resource("LightCount", visible_light_count_builder);
         fg::ResourceHandle light_assign = fg->add_resource("LightAssign", light_assign_builder);
 
         fg::ResourceHandle lit = fg->add_resource("Lit",
@@ -230,18 +226,6 @@ int main() {
             .size(window_width, window_height, 1)
             .format(otcv_context.swapchain->image_info.format));
         
-        // passes
-        // clear indirect commands and counts for g-pass
-        {
-            fg::Pass& g_indirect_clear_pass = fg->add_pass("GIndirectClearPass", fg::PassType::Transfer);
-            g_indirect_clear_pass.access(fg::ResourceAccessType::TransferOut, g_indirect_cmds_zero);
-            g_indirect_clear_pass.access(fg::ResourceAccessType::TransferOut, g_indirect_counts_zero);
-            g_indirect_clear_pass.execute_func([](CommandBuffer* cmd, fg::PassContext& ctx) {
-                cmd->cmd_fill_buffer(ctx.transfer_bufs.at(0), 0);
-                cmd->cmd_fill_buffer(ctx.transfer_bufs.at(1), 0);
-            });
-        }
-
         // frustum culling
         {
             FrustumCulling::PassConfig cfg;
@@ -251,8 +235,10 @@ int main() {
             std::shared_ptr<FrustumCulling> gfc = std::make_shared<FrustumCulling>(cfg);
 
             fg::Pass& g_frustum_cull_pass = fg->add_pass("GFrustumCull", fg::PassType::Compute);
-            g_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, g_indirect_cmds_zero, g_indirect_cmds_filled);
-            g_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, g_indirect_counts_zero, g_indirect_counts_filled);
+            g_frustum_cull_pass.access(fg::ResourceAccessType::SSBOOut, g_indirect_cmds);
+            g_frustum_cull_pass.ssbo_clear_value(g_indirect_cmds, 0);
+            g_frustum_cull_pass.access(fg::ResourceAccessType::SSBOOut, g_indirect_counts);
+            g_frustum_cull_pass.ssbo_clear_value(g_indirect_counts, 0);
             g_frustum_cull_pass.execute_func([gfc, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
                 FrustumCulling::CommandContext fc_ctx;
                 fc_ctx.cmd_buf = cmd;
@@ -279,8 +265,8 @@ int main() {
             std::shared_ptr<GeometryPass> gp = std::make_shared<GeometryPass>(cfg);
 
             fg::Pass& g_pass = fg->add_pass("Geometry", fg::PassType::Graphics);
-            g_pass.access(fg::ResourceAccessType::IndirectIn, g_indirect_cmds_filled);
-            g_pass.access(fg::ResourceAccessType::IndirectIn, g_indirect_counts_filled);
+            g_pass.access(fg::ResourceAccessType::IndirectIn, g_indirect_cmds);
+            g_pass.access(fg::ResourceAccessType::IndirectIn, g_indirect_counts);
             g_pass.access(fg::ResourceAccessType::ColorOut, g_position);
             g_pass.store_load_func(g_position, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
@@ -330,21 +316,8 @@ int main() {
 
         // cascaded shadow passes
         for (uint32_t i = 0; i < CSMParams::n_cascades; ++i) {
-            fg::ResourceHandle s_indirect_cmds_zero = fg->add_resource("ShadowIndirectCmdsZeros", indirect_cmd_builder);
-            fg::ResourceHandle s_indirect_cmds_filled = fg->add_resource("ShadowIndirectCmdsFilled", indirect_cmd_builder);
-            fg::ResourceHandle s_indirect_counts_zero = fg->add_resource("ShadowIndirectCountZeros", indirect_count_builder);
-            fg::ResourceHandle s_indirect_counts_filled = fg->add_resource("ShadowIndirectCountFilled", indirect_count_builder);
-
-            // clear indirect commands and counts for shadow pass
-            {
-                fg::Pass& s_indirect_clear_pass = fg->add_pass("SIndirectClearPass", fg::PassType::Transfer);
-                s_indirect_clear_pass.access(fg::ResourceAccessType::TransferOut, s_indirect_cmds_zero);
-                s_indirect_clear_pass.access(fg::ResourceAccessType::TransferOut, s_indirect_counts_zero);
-                s_indirect_clear_pass.execute_func([](CommandBuffer* cmd, fg::PassContext& ctx) {
-                    cmd->cmd_fill_buffer(ctx.transfer_bufs.at(0), 0);
-                    cmd->cmd_fill_buffer(ctx.transfer_bufs.at(1), 0);
-                });
-            }
+            fg::ResourceHandle s_indirect_cmds = fg->add_resource("ShadowIndirectCmds", indirect_cmd_builder);
+            fg::ResourceHandle s_indirect_counts = fg->add_resource("ShadowIndirectCount", indirect_count_builder);
 
             // frustum culling for shadow pass
             {
@@ -355,8 +328,10 @@ int main() {
                 std::shared_ptr<FrustumCulling> sfc = std::make_shared<FrustumCulling>(cfg);
 
                 fg::Pass& s_frustum_cull_pass = fg->add_pass("SFrustumCull", fg::PassType::Compute);
-                s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, s_indirect_cmds_zero, s_indirect_cmds_filled);
-                s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOInOut, s_indirect_counts_zero, s_indirect_counts_filled);
+                s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOOut, s_indirect_cmds);
+                s_frustum_cull_pass.ssbo_clear_value(s_indirect_cmds, 0);
+                s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOOut, s_indirect_counts);
+                s_frustum_cull_pass.ssbo_clear_value(s_indirect_counts, 0);
                 s_frustum_cull_pass.execute_func([sfc, i](CommandBuffer* cmd, fg::PassContext& ctx) {
                     FrustumCulling::CommandContext fc_ctx;
                     fc_ctx.cmd_buf = cmd;
@@ -376,8 +351,8 @@ int main() {
                 std::shared_ptr<ShadowMapping> sm = std::make_shared<ShadowMapping>(cfg);
 
                 fg::Pass& shadow_pass = fg->add_pass("ShadowOneCascade", fg::PassType::Graphics);
-                shadow_pass.access(fg::ResourceAccessType::IndirectIn, s_indirect_cmds_filled);
-                shadow_pass.access(fg::ResourceAccessType::IndirectIn, s_indirect_counts_filled);
+                shadow_pass.access(fg::ResourceAccessType::IndirectIn, s_indirect_cmds);
+                shadow_pass.access(fg::ResourceAccessType::IndirectIn, s_indirect_counts);
                 shadow_pass.access(fg::ResourceAccessType::DepthStencilOut, shadow_maps[i]);
                 shadow_pass.store_load_func(shadow_maps[i], [](RenderingBegin::Attachment& attachment) {
                     attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(1.0f, 0.0f);
@@ -421,16 +396,6 @@ int main() {
 
         // light clustering pass
         {
-            // clear buffer for light clustering
-            fg::Pass& light_culling_clear_pass = fg->add_pass("LightCullingClearPass", fg::PassType::Transfer);
-            light_culling_clear_pass.access(fg::ResourceAccessType::TransferOut, visible_light_ids_zero);
-            light_culling_clear_pass.access(fg::ResourceAccessType::TransferOut, visible_light_count_zero);
-            light_culling_clear_pass.execute_func([](CommandBuffer* cmd, fg::PassContext& ctx) {
-                cmd->cmd_fill_buffer(ctx.transfer_bufs.at(0), 0);
-                cmd->cmd_fill_buffer(ctx.transfer_bufs.at(1), 0);
-            });
-        }
-        {
             LightClustering::PassConfig cfg;
             cfg.res_context = res_ctx;
             cfg.shader_dir = "./spirv/light_clustering/";
@@ -444,8 +409,10 @@ int main() {
 
             // light culling
             fg::Pass& light_culling_pass = fg->add_pass("LightCulling", fg::PassType::Compute);
-            light_culling_pass.access(fg::ResourceAccessType::SSBOInOut, visible_light_ids_zero, visible_light_ids_filled);
-            light_culling_pass.access(fg::ResourceAccessType::SSBOInOut, visible_light_count_zero, visible_light_count_filled);
+            light_culling_pass.access(fg::ResourceAccessType::SSBOOut, visible_light_ids);
+            light_culling_pass.ssbo_clear_value(visible_light_ids, 0);
+            light_culling_pass.access(fg::ResourceAccessType::SSBOOut, visible_light_count);
+            light_culling_pass.ssbo_clear_value(visible_light_count, 0);
             light_culling_pass.execute_func([app, lc, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
                 LightClustering::CullContext c_ctx;
                 c_ctx.cmd_buf = cmd;
@@ -458,8 +425,8 @@ int main() {
 
             // assign lights to clusters
             fg::Pass& light_assign_pass = fg->add_pass("LightAssign", fg::PassType::Compute);
-            light_assign_pass.access(fg::ResourceAccessType::SSBOIn, visible_light_ids_filled);
-            light_assign_pass.access(fg::ResourceAccessType::SSBOIn, visible_light_count_filled);
+            light_assign_pass.access(fg::ResourceAccessType::SSBOIn, visible_light_ids);
+            light_assign_pass.access(fg::ResourceAccessType::SSBOIn, visible_light_count);
             light_assign_pass.access(fg::ResourceAccessType::SSBOOut, light_assign); // light assignment buffer 
             light_assign_pass.execute_func([app, lc, &cam](CommandBuffer* cmd, fg::PassContext& ctx) {
                 LightClustering::AssignContext a_ctx;
