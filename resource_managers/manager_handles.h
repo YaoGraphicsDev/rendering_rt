@@ -32,4 +32,7 @@ struct RenderableHandle {
 struct LightHandle {
 	int id = -1;
 };
+struct ShadowHandle {
+	int id = -1;
+};
 const int INVALID_MANAGER_HANDLE_ID = -1;

@@ -92,7 +92,7 @@ layout(set = 0, binding = 1) uniform ShadowUBO {
 
 layout(set = 0, binding = 2) uniform sampler2D samplerLTCParams[2];    // linear
 layout(set = 0, binding = 3) uniform sampler samplerGBuffer;       // nearest
-layout(set = 0, binding = 4) uniform sampler samplerShadowMap;      // linear
+layout(set = 0, binding = 4) uniform sampler samplerShadowMap;      // nearest
 layout(set = 0, binding = 5) uniform sampler3D samplerShadowJitter; // nearest, address repeat
 
 // Set 3: Managed by framegraph

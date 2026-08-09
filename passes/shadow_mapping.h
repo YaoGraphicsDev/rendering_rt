@@ -19,6 +19,7 @@ public:
 		otcv::CommandBuffer*	cmd_buf = nullptr;
 		glm::mat4				light_proj = glm::mat4(1.0f);
 		glm::mat4				light_view = glm::mat4(1.0f);
+		int						layer_id = 0;
 		otcv::Buffer*			fg_indirect_cmd = nullptr;
 		uint32_t				indirect_cmd_stride;
 		otcv::Buffer*			fg_indirect_count = nullptr;
@@ -36,4 +37,5 @@ private:
 	otcv::GraphicsPipeline*									_pipeline;
 	std::shared_ptr<otcv::NaiveExpandableDescriptorPool>	_desc_pool = nullptr;
 	std::vector<otcv::DescriptorSet*>						_obj_desc_sets; // one per frame-in-flight
+	otcv::DescriptorSet*									_material_desc_set = nullptr; // materials are immutable
 };

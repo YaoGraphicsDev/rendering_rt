@@ -46,6 +46,7 @@ target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/common")
 target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/gltf_parser")
 target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/resource_managers")
 target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/passes")
+target_add_source_dir(${PROJECT_NAME} "${CMAKE_CURRENT_SOURCE_DIR}/subsystems")
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_BINARY_DIR}/include")

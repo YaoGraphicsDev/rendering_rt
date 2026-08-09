@@ -1,5 +1,6 @@
 #include "frame_graph_application.h"
 #include "resource_managers/resource_context.h"
+#include "subsystems/shadow_system.h"
 #include "gltf_parser/gltf_parser.h"
 #include "passes/passes.h"
 #include "common/camera.h"
@@ -11,12 +12,13 @@
 
 using namespace otcv;
 
+// works for now
 struct CSMParams {
     static constexpr uint32_t n_cascades = 4;
     static constexpr uint32_t resolution = 2048;
     static constexpr float blend_overlap = 0.5f; // we dont really need to blend between cascades here. Just a buffer zone
 };
-std::vector<CSMUtils::CascadeContext> csm_ctxs;
+// std::vector<CSMUtils::CascadeContext> csm_ctxs;
 
 struct LightClusterParams {
     static constexpr glm::uvec3 n_clusters = glm::uvec3(32, 32, 32);
@@ -24,12 +26,12 @@ struct LightClusterParams {
 };
 
 struct IrradianceFieldParams {
-    static constexpr glm::vec3 probe_start = glm::vec3(-12.342812, -0.349566, -5.74974);
-    static constexpr glm::vec3 probe_step = glm::vec3(1.619833, 0.770781, 1.665149);
+    static constexpr glm::vec3 probe_start = glm::vec3(-11.955299, -0.706239, -5.622647);
+    static constexpr glm::vec3 probe_step = glm::vec3(1.568164, 1.715203, 0.754157);
     // The number give by DDGI was 64. At that rate, sample rays may miss some high frequency details around it..
     // Take sponza for example, probes hiding in shadows on the second floor looking down on the well lit atrium below. Lots of hight frequency dark & lit details on it
     static constexpr uint32_t rays_per_probe = 192; 
-    static constexpr glm::ivec3 probe_counts = glm::ivec3(16, 16, 8);
+    static constexpr glm::ivec3 probe_counts = glm::ivec3(16, 8, 16);
     static constexpr uint32_t n_probes = probe_counts.x * probe_counts.y * probe_counts.z;
     static constexpr float depth_sharpness = 50.0f;
     static constexpr float hysteresis = 0.98f;
@@ -120,6 +122,8 @@ int main() {
     res_ctx->render_queue = std::make_shared<RenderQueue>(scene_mgr, mesh_mgr, mat_mgr, "./spirv/mesh_preprocess/");
     res_ctx->scene_acc = std::make_shared<SceneAcceleration>(scene_mgr, mesh_mgr, mat_mgr);
 
+    std::shared_ptr<ShadowMapSystem> shadowmap_sys = std::make_shared<ShadowMapSystem>(res_ctx, cam);
+
     // declare lighting pass here as it gets updated every frame
     std::shared_ptr<LightingPass> lp = nullptr;
 
@@ -166,7 +170,7 @@ int main() {
         fg::ResourceHandle g_emissive = fg->add_resource("GEmissive",
             ImageBuilder()
             .size(window_width, window_height, 1)
-            // That's what Unity URP store it https://docs.unity3d.com/Packages/com.unity.render-pipelines.universal@16.0/manual/rendering/deferred-rendering-path.html
+            // That's how Unity URP store it https://docs.unity3d.com/Packages/com.unity.render-pipelines.universal@16.0/manual/rendering/deferred-rendering-path.html
             .format(VK_FORMAT_B10G11R11_UFLOAT_PACK32));
 
         fg::ResourceHandle g_mat_flags = fg->add_resource("GMatFlags",
@@ -178,23 +182,6 @@ int main() {
             ImageBuilder()
             .size(window_width, window_height, 1)
             .format(VK_FORMAT_D24_UNORM_S8_UINT)
-            .aspect(VK_IMAGE_ASPECT_DEPTH_BIT));
-
-        std::vector<fg::ResourceHandle> shadow_maps(CSMParams::n_cascades);
-        for (uint32_t i = 0; i < CSMParams::n_cascades; ++i) {
-            shadow_maps[i] = fg->add_resource("ShadowCascade",
-                ImageBuilder()
-                .size(CSMParams::resolution, CSMParams::resolution, 1)
-                .format(VK_FORMAT_D24_UNORM_S8_UINT)
-                .aspect(VK_IMAGE_ASPECT_DEPTH_BIT));
-        }
-        
-        fg::ResourceHandle shadow_cascades = fg->add_resource("ShadowCascadeComposite",
-            ImageBuilder()
-            .size(CSMParams::resolution, CSMParams::resolution, 1)
-            .format(VK_FORMAT_D24_UNORM_S8_UINT)
-            .layers(CSMParams::n_cascades)
-            .view_type(VK_IMAGE_VIEW_TYPE_2D_ARRAY)
             .aspect(VK_IMAGE_ASPECT_DEPTH_BIT));
 
         BufferBuilder visible_light_id_builder =
@@ -314,85 +301,9 @@ int main() {
             });
         }
 
-        // cascaded shadow passes
-        for (uint32_t i = 0; i < CSMParams::n_cascades; ++i) {
-            fg::ResourceHandle s_indirect_cmds = fg->add_resource("ShadowIndirectCmds", indirect_cmd_builder);
-            fg::ResourceHandle s_indirect_counts = fg->add_resource("ShadowIndirectCount", indirect_count_builder);
-
-            // frustum culling for shadow pass
-            {
-                FrustumCulling::PassConfig cfg;
-                cfg.res_context = res_ctx;
-                cfg.shader_dir = "./spirv/scene_culling/";
-                cfg.pipelines_diff = false;
-                std::shared_ptr<FrustumCulling> sfc = std::make_shared<FrustumCulling>(cfg);
-
-                fg::Pass& s_frustum_cull_pass = fg->add_pass("SFrustumCull", fg::PassType::Compute);
-                s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOOut, s_indirect_cmds);
-                s_frustum_cull_pass.ssbo_clear_value(s_indirect_cmds, 0);
-                s_frustum_cull_pass.access(fg::ResourceAccessType::SSBOOut, s_indirect_counts);
-                s_frustum_cull_pass.ssbo_clear_value(s_indirect_counts, 0);
-                s_frustum_cull_pass.execute_func([sfc, i](CommandBuffer* cmd, fg::PassContext& ctx) {
-                    FrustumCulling::CommandContext fc_ctx;
-                    fc_ctx.cmd_buf = cmd;
-                    fc_ctx.proj = csm_ctxs[i].light_proj;
-                    fc_ctx.view = csm_ctxs[i].light_view;
-                    fc_ctx.fg_set = ctx.desc_set;
-                    sfc->commands(fc_ctx);
-                });
-            }
-
-            // shadow pass
-            {
-                ShadowMapping::PassConfig cfg;
-                cfg.res_context = res_ctx;
-                cfg.shader_dir = "./spirv/shadows/";
-                cfg.depth_attachment_format = fg->get_img_builder(shadow_maps[i])._image_info.format;
-                std::shared_ptr<ShadowMapping> sm = std::make_shared<ShadowMapping>(cfg);
-
-                fg::Pass& shadow_pass = fg->add_pass("ShadowOneCascade", fg::PassType::Graphics);
-                shadow_pass.access(fg::ResourceAccessType::IndirectIn, s_indirect_cmds);
-                shadow_pass.access(fg::ResourceAccessType::IndirectIn, s_indirect_counts);
-                shadow_pass.access(fg::ResourceAccessType::DepthStencilOut, shadow_maps[i]);
-                shadow_pass.store_load_func(shadow_maps[i], [](RenderingBegin::Attachment& attachment) {
-                    attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(1.0f, 0.0f);
-                });
-                shadow_pass.render_area_func([](RenderingBegin& begin) {
-                    begin.area(CSMParams::resolution, CSMParams::resolution);
-                });
-                shadow_pass.execute_func([app, sm, i](CommandBuffer* cmd, fg::PassContext& ctx) {
-                    ShadowMapping::CommandContext s_ctx;
-                    s_ctx.cmd_buf = cmd;
-                    s_ctx.light_proj = csm_ctxs[i].light_proj;
-                    s_ctx.light_view = csm_ctxs[i].light_view;
-                    s_ctx.fg_indirect_cmd = ctx.indirect_bufs.at(0);
-                    s_ctx.indirect_cmd_stride = FrustumCullComp::IndirectBuffer::ElementStride;
-                    s_ctx.fg_indirect_count = ctx.indirect_bufs.at(1);
-                    s_ctx.fg_frame_id = app->frame_slot();
-                    s_ctx.width = CSMParams::resolution;
-                    s_ctx.height = CSMParams::resolution;
-                    sm->commands(s_ctx);
-                });
-            }
-        }
-
-        // Copy individual shadowmaps to cascaded shadowmap
-        {
-            fg::Pass& shadow_composite_pass = fg->add_pass("CascadeShadowComposite", fg::PassType::Transfer);
-            for (uint32_t i = 0; i < CSMParams::n_cascades; ++i) {
-                shadow_composite_pass.access(fg::ResourceAccessType::TransferIn, shadow_maps[i]);
-            }
-            shadow_composite_pass.access(fg::ResourceAccessType::TransferOut, shadow_cascades);
-            std::shared_ptr<LayersCompositing> lc = std::make_shared<LayersCompositing>();
-            shadow_composite_pass.execute_func([lc](CommandBuffer* cmd, fg::PassContext& ctx) {
-                LayersCompositing::CommandContext lc_ctx;
-                lc_ctx.cmd_buf = cmd;
-                lc_ctx.fg_src_imgs = std::vector<otcv::Image*>(ctx.transfer_imgs.begin(), ctx.transfer_imgs.end() - 1);
-                lc_ctx.fg_dst_img = ctx.transfer_imgs.back();
-                lc_ctx.aspects = VK_IMAGE_ASPECT_DEPTH_BIT;
-                lc->commands(lc_ctx);
-            });
-        }
+        fg::ResourceHandle shadow_cascades;
+        ShadowMapSystem::FGResources res = shadowmap_sys->commands(app);
+        shadow_cascades = res.cascaded;
 
         // light clustering pass
         {
@@ -438,7 +349,6 @@ int main() {
             });
         }
 
-
         // lighting pass
         {
             LightingPass::PassConfig cfg;
@@ -446,7 +356,7 @@ int main() {
             cfg.shader_dir = "./spirv/lighting_pass/";
             cfg.lct_luts_paths = { "./assets/lct/lut_0.dds", "./assets/lct/lut_1.dds" };
             cfg.color_attachment_format = fg->get_img_builder(lit)._image_info.format;
-            cfg.cascaded_shadow.n_cascades = CSMParams::n_cascades;
+            cfg.cascaded_shadow.n_cascades = CSMParams::n_cascades; // static_assert(false); // dont hack it. Do it the right way, acquire values from LightMeta
             cfg.cascaded_shadow.blend_depth = CSMParams::blend_overlap;
             cfg.cascaded_shadow.resolution = CSMParams::resolution;
             lp.reset(new LightingPass(cfg));
@@ -936,20 +846,16 @@ int main() {
         // cam->update_proj();
 
         // update scene
-        if (area_light_snh.id != INVALID_MANAGER_HANDLE_ID) {
-            scene_mgr->move_node_local(area_light_snh, glm::vec3(0.0f), glm::rotate(glm::mat4(1.0f), dt, glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f));
-        }
+        //if (area_light_snh.id != INVALID_MANAGER_HANDLE_ID) {
+        //    scene_mgr->move_node_local(area_light_snh, glm::vec3(0.0f), glm::rotate(glm::mat4(1.0f), dt, glm::vec3(1.0f, 0.0f, 0.0f)), glm::vec3(1.0f));
+        //}
         scene_mgr->update(app->frame_slot());
-
-        // update CSM parameters
-        csm_ctxs = CSMUtils::csm_ortho_projections(
-            cam->proj, cam->view, cam->near, cam->far,
-            glm::vec3(sun_node.world_transform * glm::vec4(sun_light.direction, 0.0f)),
-            CSMParams::n_cascades, CSMParams::resolution, CSMParams::blend_overlap);
+        
+        shadowmap_sys->update();
 
         // update lighiting pass
         LightingPass::UpdateContext lp_ctx;
-        lp_ctx.shadow.cascades = csm_ctxs;
+        lp_ctx.shadow.cascades = shadowmap_sys->cascade_contexts(); // set up correct parameters for the sun light node
         lp_ctx.width = width;
         lp_ctx.height = height;
         lp->update(app->frame_slot(), lp_ctx);

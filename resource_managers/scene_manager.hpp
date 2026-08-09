@@ -37,6 +37,17 @@ struct LightMeta {
 	glm::vec2 half_dims = glm::vec2(1.0f);
 
 	SceneNodeHandle	node;
+
+	struct ShadowSettings {
+		bool casts_shadows = true;
+		uint32_t resolution = 2048;
+		// cascaded exclusive
+		float blend_overlap = 0.5f; // we dont really need to blend between cascades here. Just a buffer zone
+		float z_near = 0.1f;
+		float z_far = 40.0f;
+		uint32_t n_cascades = 4;
+	};
+	ShadowSettings shadow_settings;
 };
 
 struct RenderableMeta {
@@ -88,6 +99,17 @@ public:
 
 	LightMeta& get_light(SceneNodeHandle snh) {
 		return _light_metas.at(get_node(snh).light.id);
+	}
+
+	template<typename Pred>
+	std::pair<SceneNodeHandle, SceneNodeMeta> find_node_if(Pred pred) {
+		auto iter = std::find_if(_node_metas.begin(), _node_metas.end(), pred);
+		if (iter == _node_metas.end()) {
+			return { {INVALID_MANAGER_HANDLE_ID}, SceneNodeMeta() };
+		}
+		else {
+			return { {static_cast<int>(std::distance(_node_metas.begin(), iter))}, *iter };
+		}
 	}
 
 	void move_node_in_world(SceneNodeHandle snh, const glm::mat4& transform);
