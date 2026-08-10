@@ -1,6 +1,7 @@
 #version 450
 #extension GL_EXT_nonuniform_qualifier : require
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
 
 layout(location = 0) in vec2 inUV;
 
@@ -66,6 +67,7 @@ struct Cascade {
 
 const uint MAX_SHADOW_CASCADES = 4;
 struct CascadedShadow {
+    bool enabled; // TODO: unused actually
     float blendDepth;
     uint nCascades;
     uint resolution;
@@ -73,7 +75,7 @@ struct CascadedShadow {
 };
 
 struct ShadowJitter {
-    vec2 nTiles;
+    uint tileSize;
     uint nStrataPerDim;
     float radius;
 };
@@ -81,7 +83,7 @@ struct ShadowJitter {
 layout(set = 0, binding = 1) uniform ShadowUBO {
     // cascaded
     // allow only 1 directional light to cast cascaded shadow. -1 disables cascaded shadow
-    int dLightId; 
+    // int dLightId; 
     CascadedShadow cascadedShadow;
 
     // TODO: point/area light shadow
@@ -258,14 +260,6 @@ vec3 ltcEvaluate(vec3 n, vec3 v, vec3 p, mat3 invM, vec3 light_verts[MAX_AREA_LI
     return lo_i;
 }
 
-
-
-// layout(set = 0, binding = 4) uniform sampler samplerShadowMap;      // linear
-// 
-// layout(set = 3, binding = 6) uniform texture2DArray texCascadedShadow;
-
-
-
 // x: 0.0 -- in shadow, 1.0 -- not in shadow
 // y: valid when x = 0.0, positive blocker distance
 vec2 arrayShadowCompare(
@@ -323,7 +317,7 @@ float pcssShadowFactor(
     float bias = max(texel * (1.0 - cosTheta), texel * 0.3);
 
     uint nStrata = sUbo.shadowJitter.nStrataPerDim;
-    vec2 nTiles = sUbo.shadowJitter.nTiles;
+    vec2 nTiles = vec2(textureSize(texDepth, 0)) / float(sUbo.shadowJitter.tileSize);
 
     uint nPairs = (nStrata * nStrata) / 2;
     float jitterStepW = 1.0 / float(nPairs);

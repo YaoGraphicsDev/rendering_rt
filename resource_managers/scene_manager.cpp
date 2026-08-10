@@ -5,7 +5,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/matrix_decompose.hpp>
 
-#include "glsl_reflect/lighting_pass/pbr.frag.hpp"
+#include "glsl_reflect/lighting_pass/lighting.frag.hpp"
 
 using namespace otcv;
 
@@ -126,11 +126,11 @@ void SceneManager::bindless_build() {
 	{
 		uint32_t n_lights = _light_metas.size();
 		for (PerFrameBOs& f_bo : _per_frame_bos) {
-			f_bo.lights.reset(new SSBO<PbrFrag::LightBuffer>(n_lights));
+			f_bo.lights.reset(new SSBO<LightingFrag::LightBuffer>(n_lights));
 			for (uint32_t i = 0; i < n_lights; ++i) {
 				const LightMeta& lm = _light_metas[i];
 				SceneNodeMeta& snm = _node_metas.at(lm.node.id);
-				PbrFrag::Light light;
+				LightingFrag::Light light;
 				light.type = (uint32_t)lm.type;
 				light.intensity = lm.intensity;
 				light.color = vec3_to_array(lm.color);
@@ -165,17 +165,12 @@ void SceneManager::update(uint32_t frame_id) {
 		SceneNodeMeta& snm = _node_metas.at(lm.node.id);
 
 		glm::vec3 c = snm.world_transform * glm::vec4(lm.center, 1.0f);
-		f_bo.lights->set(i, FIELD_RANGE(PbrFrag::LightBuffer::Element, center), &c);
+		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, center), &c);
 		glm::vec3 dir = snm.world_transform * glm::vec4(lm.direction, 0.0f);
-		f_bo.lights->set(i, FIELD_RANGE(PbrFrag::LightBuffer::Element, direction), &dir);
+		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, direction), &dir);
 		glm::vec3 basis_x = glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[0], 0.0f));
-		f_bo.lights->set(i, FIELD_RANGE(PbrFrag::LightBuffer::Element, planeBasisX), &basis_x);
+		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, planeBasisX), &basis_x);
 		glm::vec3 basis_y = glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[1], 0.0f));
-		f_bo.lights->set(i, FIELD_RANGE(PbrFrag::LightBuffer::Element, planeBasisY), &basis_y);
-
-		//static_assert(false);
-		//if (snm.name == "AreaLight" && frame_id == 0) {
-		//	int a = 0;
-		//}
+		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, planeBasisY), &basis_y);
 	}
 }

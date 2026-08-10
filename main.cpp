@@ -124,9 +124,6 @@ int main() {
 
     std::shared_ptr<ShadowMapSystem> shadowmap_sys = std::make_shared<ShadowMapSystem>(res_ctx, cam);
 
-    // declare lighting pass here as it gets updated every frame
-    std::shared_ptr<LightingPass> lp = nullptr;
-
     auto configure_framegraph = [&](fg::Application* app) {
         otcv::Context otcv_context = app->otcv_context();
         uint32_t window_width = otcv_context.swapchain->image_info.extent.width;
@@ -353,13 +350,11 @@ int main() {
         {
             LightingPass::PassConfig cfg;
             cfg.res_context = res_ctx;
+            cfg.shadow_sys = shadowmap_sys;
             cfg.shader_dir = "./spirv/lighting_pass/";
             cfg.lct_luts_paths = { "./assets/lct/lut_0.dds", "./assets/lct/lut_1.dds" };
             cfg.color_attachment_format = fg->get_img_builder(lit)._image_info.format;
-            cfg.cascaded_shadow.n_cascades = CSMParams::n_cascades; // static_assert(false); // dont hack it. Do it the right way, acquire values from LightMeta
-            cfg.cascaded_shadow.blend_depth = CSMParams::blend_overlap;
-            cfg.cascaded_shadow.resolution = CSMParams::resolution;
-            lp.reset(new LightingPass(cfg));
+            std::shared_ptr<LightingPass> lp = std::make_shared<LightingPass>(cfg);
 
             fg::Pass& lighting_pass = fg->add_pass("Lighting", fg::PassType::Graphics);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_depth);
@@ -851,14 +846,7 @@ int main() {
         //}
         scene_mgr->update(app->frame_slot());
         
-        shadowmap_sys->update();
-
-        // update lighiting pass
-        LightingPass::UpdateContext lp_ctx;
-        lp_ctx.shadow.cascades = shadowmap_sys->cascade_contexts(); // set up correct parameters for the sun light node
-        lp_ctx.width = width;
-        lp_ctx.height = height;
-        lp->update(app->frame_slot(), lp_ctx);
+        shadowmap_sys->update(app->frame_slot());
     };
 
     fg_app->framegraph_initial_build(configure_framegraph);

@@ -1,6 +1,7 @@
 #include "shadow_system.h"
 #include "passes/frustum_culling.h"
 #include "passes/shadow_mapping.h"
+#include "common/pcf_shadow_noise.h"
 
 #include "glsl_reflect/scene_culling/frustum_cull.comp.hpp"
 
@@ -9,12 +10,28 @@ using namespace otcv;
 ShadowMapSystem::ShadowMapSystem(std::shared_ptr<ResourceContext> res_ctx, std::shared_ptr<PerspectiveCamera> cam) {
     _res_ctx = res_ctx;
     _cam = cam;
-    update();
+
+    _sampler_shadowmap = SamplerBuilder().filter(VK_FILTER_NEAREST, VK_FILTER_NEAREST).build();
+    _pcf_noise = ShadowNoiseTexture::disk_noise_texture(ShadowJitterParams::tile_size, ShadowJitterParams::n_strata_per_dim);
+    _sampler_shadow_jitter = SamplerBuilder().filter(VK_FILTER_NEAREST, VK_FILTER_NEAREST).address_mode(VK_SAMPLER_ADDRESS_MODE_REPEAT).build();
+
+    uint32_t n_frames = otcv::get_context().swapchain->images.size();
+    _shadow_ubos.resize(n_frames);
+    for (uint32_t i = 0; i < n_frames; ++i) {
+        update(i);
+    }
 }
 
-void ShadowMapSystem::update() {
+ShadowMapSystem::~ShadowMapSystem() {
+    _sampler_shadow_jitter->destroy();
+    _pcf_noise->destroy();
+    _sampler_shadowmap->destroy();
+}
+
+
+void ShadowMapSystem::update(uint32_t frame_id) {
     SceneManager& scene = *_res_ctx->scene_mgr;
-    auto [sun_node_handle, sun_node] = scene.find_node_if([&](const SceneNodeMeta& snm) {
+    auto [sun_node_handle, sun_node] = scene.find_node_if([&](const SceneNodeMeta& snm) { // TODO: could save some iterations if traverse light node
         return
             snm.light.id != INVALID_MANAGER_HANDLE_ID &&
             scene._light_metas.at(snm.light.id).type == LightMeta::Type::Directional &&
@@ -31,9 +48,30 @@ void ShadowMapSystem::update() {
             _csm_settings.n_cascades,
             _csm_settings.resolution,
             sun_light.shadow_settings.blend_overlap);
+        
+        LightingFrag::ShadowUBO ubo{};
+        ubo.cascadedShadow.enabled = uint32_t(true);
+        ubo.cascadedShadow.blendDepth = _csm_settings.blend_overlap;
+        ubo.cascadedShadow.nCascades = _csm_settings.n_cascades;
+        ubo.cascadedShadow.resolution = _csm_settings.resolution;
+        for (uint32_t c = 0; c < _csm_ctxs.size(); ++c) {
+            ubo.cascadedShadow.cascades.at(c).zBegin = _csm_ctxs[c].z_begin;
+            ubo.cascadedShadow.cascades.at(c).zEnd = _csm_ctxs[c].z_end;
+            ubo.cascadedShadow.cascades.at(c).lightSpaceView = mat4_to_array(_csm_ctxs[c].light_view);
+            ubo.cascadedShadow.cascades.at(c).lightSpaceProject = mat4_to_array(_csm_ctxs[c].light_proj);
+        }
+        ubo.shadowJitter.tileSize = ShadowJitterParams::tile_size;
+        ubo.shadowJitter.nStrataPerDim = ShadowJitterParams::n_strata_per_dim;
+        ubo.shadowJitter.radius = ShadowJitterParams::radius;
+
+        _shadow_ubos.at(frame_id).set({ 0, sizeof(LightingFrag::ShadowUBO) }, &ubo);
     }
     else {
         _csm_ctxs.clear();
+        LightingFrag::ShadowUBO ubo{};
+        ubo.cascadedShadow.enabled = uint32_t(false);
+
+        _shadow_ubos.at(frame_id).set({ 0, sizeof(LightingFrag::ShadowUBO) }, &ubo);
     }
 }
 

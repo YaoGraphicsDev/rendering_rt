@@ -7,7 +7,7 @@
 #include "material_manager.hpp"
 
 #include "glsl_reflect/geometry_pass/geometry.vert.hpp"
-#include "glsl_reflect/lighting_pass/pbr.frag.hpp"
+#include "glsl_reflect/lighting_pass/Lighting.frag.hpp"
 
 struct LightMeta {
 	std::string name;
@@ -138,7 +138,7 @@ public:
 		// TODO: Put model matrices and material ids in one UBO
 		std::shared_ptr<otcv::StaticUBOArray<GeometryVert::ModelMatUBO>>	model_mats = nullptr;
 		std::shared_ptr<otcv::StaticUBOArray<GeometryVert::MatIdUBO>>		mat_ids = nullptr;
-		std::shared_ptr<otcv::SSBO<PbrFrag::LightBuffer>>	lights = nullptr;			
+		std::shared_ptr<otcv::SSBO<LightingFrag::LightBuffer>>	lights = nullptr;			
 	};
 	std::vector<PerFrameBOs>	_per_frame_bos;	// one for each frame-in-flight
 };
