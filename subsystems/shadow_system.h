@@ -27,8 +27,39 @@ public:
 
 	std::shared_ptr<ResourceContext>		_res_ctx;
 	std::shared_ptr<PerspectiveCamera>		_cam;
+
+	// CSM
 	std::vector<CSMUtils::CascadeContext>	_csm_ctxs;		// empty means no CSM
 	LightMeta::ShadowSettings				_csm_settings;
+	
+	// cube
+	struct AABB {
+		AABB(glm::vec3 center, float half_dim) {
+			this->center = center;
+			this->half_dim = half_dim;
+			face_centers = { // in this order: +X, -X, +Y, -Y, +Z, -Z.
+				glm::vec3( 1.0f, 0.0f, 0.0f) * half_dim + center,
+				glm::vec3(-1.0f, 0.0f, 0.0f) * half_dim + center,
+				glm::vec3( 0.0f, 1.0f, 0.0f) * half_dim + center,
+				glm::vec3( 0.0f,-1.0f, 0.0f) * half_dim + center,
+				glm::vec3( 0.0f, 0.0f, 1.0f) * half_dim + center,
+				glm::vec3( 0.0f, 0.0f,-1.0f) * half_dim + center,
+			};
+		}
+		glm::vec3 center;
+		float half_dim;
+		std::vector<glm::vec3> face_centers;
+		std::vector<glm::vec3> face_ups = {
+			{0.0f,-1.0f, 0.0f},
+			{0.0f,-1.0f, 0.0f},
+			{0.0f, 0.0f, 1.0f},
+			{0.0f, 0.0f,-1.0f},
+			{0.0f,-1.0f, 0.0f},
+			{0.0f,-1.0f, 0.0f},
+		};
+	}; // AABB that bounds the entire light influence
+	std::vector<AABB>	_cube_aabbs;
+	uint32_t			_cube_face_resolution;
 
 	otcv::Image*							_pcf_noise;
 	otcv::Sampler*							_sampler_shadowmap;

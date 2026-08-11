@@ -11,6 +11,9 @@ layout(location = 2) flat out int outMaterialId;
 
 layout (push_constant) uniform PushConstants {
 	mat4 projectView;
+	bool useRadialDepth;
+	float maxRadialDepth;
+	vec3 lightPos;
 	int layerIndex;
 } consts;
 

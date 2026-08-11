@@ -40,6 +40,8 @@ struct Light {
     vec3 planeBasisY; 
     vec2 halfDims;    // area light exclusive (half width, half height)
     float influenceDistance; // bounding sphere radius
+    
+    uint cubeShadowId;
 };
 layout(std430, set = 0, binding = 0) buffer readonly LightBuffer {
     Light lights[];
@@ -81,15 +83,14 @@ struct ShadowJitter {
 };
 
 layout(set = 0, binding = 1) uniform ShadowUBO {
-    // cascaded
-    // allow only 1 directional light to cast cascaded shadow. -1 disables cascaded shadow
-    // int dLightId; 
-    CascadedShadow cascadedShadow;
-
-    // TODO: point/area light shadow
-
     // pcf shadow jitter
     ShadowJitter shadowJitter;
+    // cascaded
+    CascadedShadow cascadedShadow;
+    // cube
+    uint nCubeShadows;
+    uint cubeFaceResolution;
+    float cubeMaxRadialDepths[MAX_LIGHTS];
 } sUbo;
 
 layout(set = 0, binding = 2) uniform sampler2D samplerLTCParams[2];    // linear
@@ -107,6 +108,7 @@ layout(set = 3, binding = 3) uniform texture2D texMetallicRoughness;
 layout(set = 3, binding = 4) uniform texture2D texEmissive;
 layout(set = 3, binding = 5) uniform utexture2D texMatFlags; //Currently unused. Currently only LSB in use: 0 -- lit, 1 -- unlit. Other bits available
 layout(set = 3, binding = 6) uniform texture2DArray texCascadedShadow;
+layout(set = 3, binding = 7) uniform textureCubeArray texCubeShadow;
 #define MAX_LIGHT_PER_CLUSTER 32
 struct LightAssignment {
     uint nLights;
@@ -278,7 +280,7 @@ vec2 arrayShadowCompare(
     float receiverDepth = ndc.z;
 
     float cosTheta = clamp(dot(normal, -lightDir), 0.0, 1.0);
-    float bias = max(0.0005 * (1.0 - cosTheta), 0.0001);
+    float bias = max(0.005 * (1.0 - cosTheta), 0.0001);
 
     float sampleDepth =
         texture(sampler2DArray(texShadow, samp), vec3(shadowUV, layer)).r;
@@ -565,33 +567,33 @@ float cascadedShadowFactor(float zView, vec4 worldSpaceCoord, vec3 normal, vec3 
     return shadowFactor;
 }
 
-/*
-// 0.0 -- in shadow, 1.0 -- not in shadow
-// parameters should all be in view space
-float contactShadowTrace(vec4 viewSpaceCoord, float maxDistance, uint steps, vec3 direction) {    
-    float stepSize = maxDistance / float(steps);
-    for (uint s = 0; s < steps; ++s) {
-        vec3 viewSpaceRay = vec3(viewSpaceCoord) + direction * stepSize * (s + 1);
-        vec4 clipSpaceRay = projMult(consts.projEncoded, vec4(viewSpaceRay, 1.0));
-        vec3 ndcRay = clipSpaceRay.xyz / clipSpaceRay.w;
-        // float depthP = ndcP.z;
-        vec2 uvRay = (ndcRay.xy + vec2(1.0)) * vec2(0.5);
-        if (any(lessThan(uvRay, vec2(0.0))) || any(greaterThan(uvRay, vec2(1.0)))) {
-            return 1.0;
-        }
-        // float depthScene = texture(sampler2D(texDepth, samplerGBuffer), uv).r;
-        vec4 ndcSceneP = vec4(ndcRay.xy, texture(sampler2D(texDepth, samplerGBuffer), uvRay).r, 1.0);
-        vec4 viewSpaceSceneP = ndcToView(ndcSceneP, consts.projEncoded);
-        // float depthScene = texture(sampler2D(texDepth, samplerGBuffer), uv).r;
-        float depthDelta = viewSpaceSceneP.z - viewSpaceRay.z;
-        if (depthDelta > 0.0 && depthDelta < 0.2) {
-            return 0.0;
-        }
+float cubeShadowFactor(vec4 worldSpaceCoord, Light light, vec3 normal) {
+    vec3 lightToFrag = worldSpaceCoord.xyz - light.center;
+
+    float sampleDepth = texture(
+        samplerCubeArray(texCubeShadow, samplerShadowMap),
+        vec4(lightToFrag, float(light.cubeShadowId))
+    ).r;
+
+    float receiverDepth = length(lightToFrag) / sUbo.cubeMaxRadialDepths[light.cubeShadowId];
+
+    //////////
+    float cosTheta = clamp(dot(normal, -normalize(lightToFrag)), 0.0, 1.0);
+    float bias = max(0.005 * (1.0 - cosTheta), 0.001);
+
+    // float sampleDepth =
+    //     texture(sampler2DArray(texShadow, samp), vec3(shadowUV, layer)).r;
+
+    if (sampleDepth < receiverDepth - bias) {
+        return 0.0;
+    } else {
+        return 1.0;
     }
-    return 1.0;
+    ///////////////
+
+    // return currentDepth > storedDepth ? 0.0 : 1.0;
 }
-*/
- 
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     // world position
@@ -710,7 +712,8 @@ void main() {
             float d = dl / light.influenceDistance;
             float attenuation = squareFalloffAttenuation(dl2, 1.0 / light.influenceDistance);
             vec3 radiance = light.intensity * light.color * attenuation;
-            litColor += (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f);
+            float shadow = cubeShadowFactor(worldSpaceCoord, light, normal);
+            litColor += (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f) * shadow;
         } else if (light.type == LIGHT_TYPE_DIR) {
             vec3 l = -normalize(light.direction);
             vec3 h = normalize(viewDir + l);
@@ -720,12 +723,7 @@ void main() {
             vec3 BRDFSpec = F * BRDFGeometry(viewDir, l, h, normal, alphaRoughness);
             vec3 BRDFDiff = (1.0 - metallic)  * (vec3(1.0) - F) * albedo * invPI;
             vec3 radiance = light.intensity * light.color;
-
             float shadow = cascadedShadowFactor(viewSpaceCoord.z, worldSpaceCoord, normal, light.direction);
-            // if (shadow > 0.9f) {
-            //     shadow *= contactShadowTrace(viewSpaceCoord, 0.2, 4, vec3(viewMult(consts.viewBaseQuat, consts.camPos, vec4(-light.lightDirection, 0.0))));
-            // }
-            // float shadow = contactShadowTrace(viewSpaceCoord, 0.2, 8, vec3(viewMult(consts.viewBaseQuat, consts.camPos, vec4(-light.lightDirection, 0.0))));
             litColor += (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f) * shadow;
         }
 

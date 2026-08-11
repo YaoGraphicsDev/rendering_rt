@@ -26,8 +26,15 @@ public:
 		glm::mat4				view = glm::mat4(1.0f);
 		otcv::DescriptorSet*	fg_set = nullptr;
 	};
-	// call this in framegraph exec function
 	void commands(CommandContext& ctx);
+
+	struct CommandContext2 {
+		otcv::CommandBuffer*	cmd_buf = nullptr;
+		glm::vec3				aabb_min;
+		glm::vec3				aabb_max;
+		otcv::DescriptorSet*	fg_set = nullptr;
+	};
+	void commands(CommandContext2& ctx);
 
 private:
 	bool _pipeline_diff;

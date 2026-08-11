@@ -8,6 +8,9 @@ layout(location = 2) flat in int inMaterialId;
 
 layout (push_constant) uniform PushConstants {
 	mat4 projectView;
+	bool useRadialDepth;
+	float maxRadialDepth;
+	vec3 lightPos;
 	int layerIndex;
 } consts;
 
@@ -43,4 +46,10 @@ void main() {
 		}
 	}
 	// no material, just draw it out in shadow pass.
+
+	if (consts.useRadialDepth) {
+		gl_FragDepth = clamp(length(consts.lightPos - inWorldPosition) / consts.maxRadialDepth, 0.0, 1.0);
+	} else {
+		gl_FragDepth = gl_FragCoord.z; // If one branch writes depth, all branch write depth
+	}
 }

@@ -112,6 +112,17 @@ public:
 		}
 	}
 
+	template<typename Pred>
+	std::pair<LightHandle, LightMeta> find_light_if(Pred pred) {
+		auto iter = std::find_if(_light_metas.begin(), _light_metas.end(), pred);
+		if (iter == _light_metas.end()) {
+			return { {INVALID_MANAGER_HANDLE_ID}, LightMeta() };
+		}
+		else {
+			return { {static_cast<int>(std::distance(_light_metas.begin(), iter))}, *iter };
+		}
+	}
+
 	void move_node_in_world(SceneNodeHandle snh, const glm::mat4& transform);
 
 	void move_node_local(SceneNodeHandle snh, glm::vec3 trans, glm::mat3 rot, glm::vec3 scale);

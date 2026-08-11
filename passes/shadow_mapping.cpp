@@ -40,6 +40,7 @@ ShadowMapping::ShadowMapping(const PassConfig& cfg) {
 		.vertex_state(_res->mesh_mgr->_vb->builder)
 		.add_dynamic_state(VK_DYNAMIC_STATE_VIEWPORT)
 		.add_dynamic_state(VK_DYNAMIC_STATE_SCISSOR)
+		.add_dynamic_state(VK_DYNAMIC_STATE_FRONT_FACE)
 		.build();
 
 	_desc_pool.reset(new NaiveExpandableDescriptorPool);
@@ -81,6 +82,14 @@ void ShadowMapping::commands(CommandContext& ctx) {
 	ctx.cmd_buf->cmd_set_viewport(ctx.width, ctx.height);
 	ctx.cmd_buf->cmd_set_scissor(ctx.width, ctx.height);
 
+	if (ctx.cube_face.enabled) {
+		ctx.light_proj[1][1] *= -1.0f;
+		ctx.cmd_buf->cmd_set_front_face(VK_FRONT_FACE_CLOCKWISE);
+	}
+	else {
+		ctx.cmd_buf->cmd_set_front_face(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+	}
+
 	ctx.cmd_buf->cmd_bind_vertex_buffer(_res->mesh_mgr->_vb);
 	ctx.cmd_buf->cmd_bind_index_buffer(_res->mesh_mgr->_ib, VK_INDEX_TYPE_UINT16);
 
@@ -90,6 +99,9 @@ void ShadowMapping::commands(CommandContext& ctx) {
 	ShadowMappingVert::PushConstants pc;
 	pc.projectView = mat4_to_array(ctx.light_proj * ctx.light_view);
 	pc.layerIndex = ctx.layer_id;
+	pc.useRadialDepth = uint32_t(ctx.cube_face.enabled);
+	pc.maxRadialDepth = ctx.cube_face.max_radial_depth;
+	pc.lightPos = vec3_to_array(ctx.cube_face.light_pos);
 	ctx.cmd_buf->cmd_push_constant(_pipeline, pc);
 
 	ctx.cmd_buf->cmd_bind_graphics_pipeline(_pipeline);

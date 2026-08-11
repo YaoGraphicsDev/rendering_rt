@@ -141,3 +141,38 @@ void FrustumCulling::commands(CommandContext& ctx) {
 		ctx.cmd_buf->cmd_dispatch(calc_group_count(_res->render_queue->_order.size(), _compute_group_size), 1, 1);
 	}
 }
+
+void FrustumCulling::commands(CommandContext2& ctx) {
+	glm::vec4 left(-1.0f, 0.0f, 0.0f, ctx.aabb_min.x);
+	glm::vec4 right(1.0f, 0.0f, 0.0f, -ctx.aabb_max.x);
+	glm::vec4 bottom(0.0f, -1.0f, 0.0f, ctx.aabb_min.y);
+	glm::vec4 top(0.0f, 1.0f, 0.0f, -ctx.aabb_max.y);
+	glm::vec4 near(0.0f, 0.0f, 1.0f, -ctx.aabb_max.z);
+	glm::vec4 far(0.0f, 0.0f, -1.0f, ctx.aabb_min.z);
+	std::array<glm::vec4, 6> planes = { left, right, top, bottom, far, near };
+	ctx.cmd_buf->cmd_push_constant(_pipeline, "frustum_faces", planes.data());
+	ctx.cmd_buf->cmd_bind_compute_pipeline(_pipeline);
+	ctx.cmd_buf->cmd_bind_descriptor_set(_pipeline, ctx.fg_set, DescriptorSetRate::FrameGraph);
+
+	if (_pipeline_diff) {
+		assert(_obj_desc_sets.size() == _res->render_queue->_order_ranges.size());
+		for (uint32_t i = 0; i < _obj_desc_sets.size(); ++i) {
+			RenderQueue::OrderRange& order_range = _res->render_queue->_order_ranges[i];
+			if (order_range.count == 0) {
+				continue;
+			}
+			ctx.cmd_buf->cmd_push_constant(_pipeline, "command_offset", &order_range.start);
+			ctx.cmd_buf->cmd_push_constant(_pipeline, "count_offset", &i);
+			ctx.cmd_buf->cmd_bind_descriptor_set(_pipeline, _obj_desc_sets[i].set, DescriptorSetRate::ComputeRead);
+			ctx.cmd_buf->cmd_dispatch(calc_group_count(order_range.count, _compute_group_size), 1, 1);
+		}
+	}
+	else {
+		assert(_obj_desc_sets.size() == 1);
+		uint32_t zero = 0;
+		ctx.cmd_buf->cmd_push_constant(_pipeline, "command_offset", &zero);
+		ctx.cmd_buf->cmd_push_constant(_pipeline, "count_offset", &zero);
+		ctx.cmd_buf->cmd_bind_descriptor_set(_pipeline, _obj_desc_sets[0].set, DescriptorSetRate::ComputeRead);
+		ctx.cmd_buf->cmd_dispatch(calc_group_count(_res->render_queue->_order.size(), _compute_group_size), 1, 1);
+	}
+}

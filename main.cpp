@@ -299,8 +299,10 @@ int main() {
         }
 
         fg::ResourceHandle shadow_cascades;
+        fg::ResourceHandle shadow_cube_faces;
         ShadowMapSystem::FGResources res = shadowmap_sys->commands(app);
         shadow_cascades = res.cascaded;
+        shadow_cube_faces = res.cube;
 
         // light clustering pass
         {
@@ -364,6 +366,16 @@ int main() {
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_emissive);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_mat_flags);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, shadow_cascades);
+            lighting_pass.access(fg::ResourceAccessType::TextureIn, shadow_cube_faces);
+            {
+                VkImageSubresourceRange sub_range{};
+                sub_range.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                sub_range.baseMipLevel = 0;
+                sub_range.levelCount = 1;
+                sub_range.baseArrayLayer = 0;
+                sub_range.layerCount = fg->get_img_builder(shadow_cube_faces)._image_info.arrayLayers;
+                lighting_pass.texture_view_as(shadow_cube_faces, sub_range, VK_IMAGE_VIEW_TYPE_CUBE_ARRAY);
+            }
             lighting_pass.access(fg::ResourceAccessType::SSBOIn, light_assign);
             lighting_pass.access(fg::ResourceAccessType::ColorOut, lit);
             lighting_pass.store_load_func(lit, [](RenderingBegin::Attachment& attachment) {
