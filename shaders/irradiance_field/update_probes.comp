@@ -64,7 +64,7 @@ ivec2 probeTileBase(uint probeID, ivec2 atlasSize, int probeSize) {
 
 const float epsilon = 1e-6;
 
-vec4 updateOneInteriorTexel(uint probeID, ivec2 interiorTexel) {
+vec4 updateOneInteriorTexelIrradiance(uint probeID, ivec2 interiorTexel) {
     vec3 texelDirection = octDecode(normalizedOctCoordFromInteriorTexel(interiorTexel, consts.probeSize));
     const float energyConservation = 1.0; // TODO: what's this? Perhaps to prevent multibounce feedback from amplifying itself?
 
@@ -75,9 +75,37 @@ vec4 updateOneInteriorTexel(uint probeID, ivec2 interiorTexel) {
 
 		vec3 rayDirection = texelFetch(texRayDirections, C, 0).xyz;
         vec3 rayHitRadiance = texelFetch(texRayHitRadiance, C, 0).xyz * energyConservation;
+
+        float weight = max(0.0, dot(texelDirection, rayDirection)); // cosine weight for irradiance
+        if (weight >= epsilon) {
+            result += vec4(rayHitRadiance * weight, weight);
+        }
+    }
+
+    // conceptually, weight sum (w component) smaller than epsilon is unlikely if ray directions are sampled uniformly from a spherical surface
+    // but with depthSharpness, cosine lobe turns thin, so small weight sum is more likely to happen to depth than irradiance.
+    // Also, if the sampling process is true random, it is possible that sampled rays directions all point away from a specific octo surface direction,
+    // which results in w smaller that epsilon
+    if (result.a > epsilon) {
+        result.xyz /= result.w;
+    }
+
+    return result;
+}
+
+vec4 updateOneInteriorTexelDepth(uint probeID, ivec2 interiorTexel) {
+    vec3 texelDirection = octDecode(normalizedOctCoordFromInteriorTexel(interiorTexel, consts.probeSize));
+    const float energyConservation = 1.0; // TODO: what's this? Perhaps to prevent multibounce feedback from amplifying itself?
+
+    // For each ray
+    vec4 result = vec4(0.0);
+    vec3 probeLocation = texelFetch(texRayOrigins, ivec2(0, probeID), 0).xyz;
+	for (int r = 0; r < consts.raysPerProbe; ++r) {
+		ivec2 C = ivec2(r, probeID);
+
+		vec3 rayDirection = texelFetch(texRayDirections, C, 0).xyz;
 		vec3 rayHitLocation = texelFetch(texRayHitLocations, C, 0).xyz;
 
-        vec3 probeLocation = texelFetch(texRayOrigins, C, 0).xyz;
         // Will be zero on a miss
 		vec3 rayHitNormal = texelFetch(texRayHitNormals, C, 0).xyz;
 
@@ -93,15 +121,10 @@ vec4 updateOneInteriorTexel(uint probeID, ivec2 interiorTexel) {
         }
 
         float weight = max(0.0, dot(texelDirection, rayDirection)); // cosine weight for irradiance
-        if (consts.updateType == UPDATE_IRRADIANCE) {
-            if (weight >= epsilon) {
-                result += vec4(rayHitRadiance * weight, weight);
-            }
-        } else { // update depth
-            weight = pow(weight, consts.depthSharpness);
-            if (weight >= epsilon) {
-                result += vec4(rayProbeDistance * weight, rayProbeDistance * rayProbeDistance * weight, 0.0, weight);
-            }
+        // update depth
+        weight = pow(weight, consts.depthSharpness);
+        if (weight >= epsilon) {
+            result += vec4(rayProbeDistance * weight, rayProbeDistance * rayProbeDistance * weight, 0.0, weight);
         }
     }
 
@@ -111,7 +134,6 @@ vec4 updateOneInteriorTexel(uint probeID, ivec2 interiorTexel) {
     // which results in w smaller that epsilon
     if (result.a > epsilon) {
         result.xyz /= result.w;
-        // result.w = 1.0 - consts.hysteresis;
     }
 
     return result;
@@ -196,7 +218,12 @@ void main()
             int(i) / N
         );
 
-        vec4 current = updateOneInteriorTexel(probeID, interiorTexel);
+        vec4 current = vec4(0.0);
+        if (consts.updateType == UPDATE_IRRADIANCE) {
+            current = updateOneInteriorTexelIrradiance(probeID, interiorTexel);
+        } else {
+            current = updateOneInteriorTexelDepth(probeID, interiorTexel);
+        }
 
         ivec2 atlasTexel = tileBase + interiorTexel + ivec2(1); // account for local border
         vec4 previous = vec4(0.0);

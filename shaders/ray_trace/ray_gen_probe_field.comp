@@ -57,6 +57,7 @@ void main() {
     // This value should be on the order of the normal bias.
     const float rayMinDistance = 1.0;//0.08;
     
+    // TODO: potential optimization opportunity: ray origins texture has only 1 row of effective data. ray directions texture has only 1 column
     imageStore(imgRayOrigins, pixelCoord, vec4(probeLocation(probeID), rayMinDistance));
     imageStore(imgRayDirections, pixelCoord, vec4(consts.probeOrientation * sphericalFibonacci(float(rayID), float(consts.raysPerProbe)), 0.0));
 }
