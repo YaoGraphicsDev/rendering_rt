@@ -262,36 +262,6 @@ vec3 ltcEvaluate(vec3 n, vec3 v, vec3 p, mat3 invM, vec3 light_verts[MAX_AREA_LI
     return lo_i;
 }
 
-// x: 0.0 -- in shadow, 1.0 -- not in shadow
-// y: valid when x = 0.0, positive blocker distance
-vec2 arrayShadowCompare(
-    texture2DArray texShadow,
-    sampler samp,
-    uint layer,
-    vec4 lightSpaceCoord,
-    mat4 lightProject,
-    vec3 normal,
-    vec3 lightDir)
-{
-    vec4 clip = lightProject * lightSpaceCoord;
-    vec3 ndc = clip.xyz / clip.w;
-
-    vec2 shadowUV = ndc.xy * 0.5 + 0.5;
-    float receiverDepth = ndc.z;
-
-    float cosTheta = clamp(dot(normal, -lightDir), 0.0, 1.0);
-    float bias = max(0.005 * (1.0 - cosTheta), 0.0001);
-
-    float sampleDepth =
-        texture(sampler2DArray(texShadow, samp), vec3(shadowUV, layer)).r;
-
-    if (sampleDepth < receiverDepth - bias)
-        return vec2(0.0, sampleDepth); // blocker depth
-
-    return vec2(1.0, 0.0);
-}
-
-
 float pcssShadowFactor(
     uint targetCascade,
     vec4 lightSpaceCoord,
@@ -313,10 +283,16 @@ float pcssShadowFactor(
     float receiverDepth = ndc.z;
 
     vec2 shadowMapSize = vec2(textureSize(sampler2DArray(texCascadedShadow, samplerShadowMap), 0).xy);
-    float texel = 1.0 / shadowMapSize.x;
+    float uvPerTexel = 1.0 / shadowMapSize.x;
+    float blockerDistanceMaxCap = 6.0f; // TODO: should be a tunable parameter
+    float blockerDistanceMinCap = 1.0f; // TODO: should be a tunable parameter
+    float uvPerUnitLength = abs(lightProject[0][0]) * 0.5; // view width inverse. View width is the width paremeter in word space when constructing ortho projection matrix
+    float sunAngularRadius = 0.526  * 0.5 * PI / 180.0; // TODO: should be a tunable parameter
+    // float lightAngle = 0.526 * PI / 180.0;
+    float searchRadiusUV = blockerDistanceMaxCap * sunAngularRadius * uvPerUnitLength; // in world space
 
     float cosTheta = clamp(dot(normal, -lightDir), 0.0, 1.0);
-    float bias = max(texel * (1.0 - cosTheta), texel * 0.3);
+    float bias = max(uvPerTexel * (1.0 - cosTheta), uvPerTexel * 0.3); // TODO: is this enough bias? Unit of bias?
 
     uint nStrata = sUbo.shadowJitter.nStrataPerDim;
     vec2 nTiles = vec2(textureSize(texDepth, 0)) / float(sUbo.shadowJitter.tileSize);
@@ -324,24 +300,14 @@ float pcssShadowFactor(
     uint nPairs = (nStrata * nStrata) / 2;
     float jitterStepW = 1.0 / float(nPairs);
 
-    float searchRadiusUV = 4.0 * texel;
-    // float minFilterRadiusUV = 1.0 * texel;
-    // float maxFilterRadiusUV = 8.0 * texel;
-
-    float viewWidthToUV = lightProject[0][0] * 0.5;
-    // Tune this. Start small.
-    float lightAngle = 0.526 * PI / 180.0;
-    // float lightSizeUV = 0.01;
-
-    // ---------- blocker search ----------
-
+    // blocker search
     vec3 jitterUVW = vec3(inUV * nTiles, 0.0);
 
     float blockerDepthSum = 0.0;
     uint blockerCount = 0;
 
-    for (uint i = 0; i < nPairs; ++i)
-    {
+    uint nSearchPairs = nStrata / 2; // number of sample pairs on the the outer-most ring
+    for (uint i = 0; i < nPairs; ++i) {
         vec4 jitter = texture(samplerShadowJitter, jitterUVW);
         jitterUVW.z += jitterStepW;
 
@@ -375,21 +341,14 @@ float pcssShadowFactor(
 
     float avgBlockerDepth = blockerDepthSum / float(blockerCount);
 
-    // ---------- penumbra ----------
-
-    // float blockerDistance = max(receiverDepth - avgBlockerDepth, 0.0);
+    // penumbra
     float blockerDistance = max(avgBlockerDepth - lightSpaceCoord.z, 0.0);
 
-    // float filterRadiusUV = clamp(
-    //      // blockerDistance * lightSizeUV,
-    //      blockerDistance * lightAngle * viewWidthToUV,
-    //      minFilterRadiusUV,
-    //      maxFilterRadiusUV);
-    blockerDistance = 5.0 * max(blockerDistance / sqrt(blockerDistance * blockerDistance + 2), 0.2);
-    float filterRadiusUV = blockerDistance * lightAngle * 0.5 * viewWidthToUV;
+    float s = smoothstep(0.0, blockerDistanceMaxCap, blockerDistance);
+    float effectiveBlockerDistance = mix(blockerDistanceMinCap, blockerDistanceMaxCap, s);
+    float filterRadiusUV = effectiveBlockerDistance * sunAngularRadius * uvPerUnitLength;
 
-    // ---------- PCF ----------
-
+    // PCF
     jitterUVW = vec3(inUV * nTiles, 0.0);
 
     float visibility = 0.0;
@@ -420,118 +379,143 @@ float pcssShadowFactor(
     return visibility / float(sampleCount);
 }
 
+void makeBasis(vec3 N, out vec3 T, out vec3 B) {
+    vec3 up = abs(N.z) < 0.999
+        ? vec3(0.0, 0.0, 1.0)
+        : vec3(0.0, 1.0, 0.0);
 
-// Why is my implementation not correct
-/*
-float pcssShadowFactor(
-    uint targetCascade,
-    vec4 lightSpaceCoord,
-    mat4 lightProject,
-    vec3 normal,
-    vec3 lightDir) {
-
-    uint nStrata = sUbo.shadowJitter.nStrataPerDim;
-    vec2 nTiles = sUbo.shadowJitter.nTiles;
-    float jitterRadius = sUbo.shadowJitter.radius;
-
-    uint nJitterSample = (nStrata * nStrata) / 2;
-    uint nTestJitterSample = nStrata / 2;
-
-    float jitterStepW = 1.0 / float(nJitterSample);
-
-    vec3 jitterUVW = vec3(inUV * nTiles, 0.0);
-    float shadowFactor = 0.0;
-
-    float blockerDistance = 0.0;
-    float blockedCount = 0;
-
-    // quick test to see if fully in light or shadow
-    for (uint i = 0; i < nTestJitterSample; ++i) {
-        vec4 jitter = texture(samplerShadowJitter, jitterUVW);
-        jitterUVW.z += jitterStepW;
-
-        vec2 f0 = arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.xy * 0.002, 0.0, 0.0), lightProject, normal, lightDir);
-        if (f0.x < 0.0005) { // in shadow
-            blockerDistance += f0.y;
-            ++blockedCount;
-        }
-        vec2 f1 = arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.zw * 0.002, 0.0, 0.0), lightProject, normal, lightDir);
-        if (f1.x < 0.0005) { // in shadow
-            blockerDistance += f1.y;
-            ++blockedCount;
-        }
-        shadowFactor += f0.x;
-        shadowFactor += f1.x;
-    }
-    
-    float testAvg = shadowFactor / float(nStrata);
-    if (testAvg < 0.0005 || testAvg > 0.9995) {
-        return testAvg; // fully in shadow or light
-    }
-    
-    // Reset shadowFactor, reuse jitterUVW.z, and continue with full sampling
-    shadowFactor = testAvg * float(nStrata);
-    blockerDistance /= float(blockedCount);
-
-    for (uint i = 0; i < nJitterSample; ++i) {
-        vec4 jitter = texture(samplerShadowJitter, jitterUVW);
-        jitterUVW.z += jitterStepW;
-
-        shadowFactor += arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.xy * clamp(0.01 * blockerDistance / 40.0, 0.0005, 0.004), 0.0, 0.0), lightProject, normal, lightDir).x;
-        shadowFactor += arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.zw * clamp(0.01 * blockerDistance / 40.0, 0.0005, 0.004), 0.0, 0.0), lightProject, normal, lightDir).x;
-    }
-
-    return shadowFactor / float(nStrata * nStrata);
-}*/
-
-/*
-float pcfShadowFactor(
-    uint targetCascade,
-    vec4 lightSpaceCoord,
-    mat4 lightProject,
-    vec3 normal,
-    vec3 lightDir) {
-
-    uint nStrata = sUbo.shadowJitter.nStrataPerDim;
-    vec2 nTiles = sUbo.shadowJitter.nTiles;
-    float jitterRadius = sUbo.shadowJitter.radius;
-
-    uint nJitterSample = (nStrata * nStrata) / 2;
-    uint nTestJitterSample = nStrata / 2;
-
-    float jitterStepW = 1.0 / float(nJitterSample);
-
-    vec3 jitterUVW = vec3(inUV * nTiles, 0.0);
-    float shadowFactor = 0.0;
-
-    // quick test to see if fully in light or shadow
-    for (uint i = 0; i < nTestJitterSample; ++i) {
-        vec4 jitter = texture(samplerShadowJitter, jitterUVW);
-        jitterUVW.z += jitterStepW;
-    
-        shadowFactor += arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.xy * jitterRadius, 0.0, 0.0), lightProject, normal, lightDir);
-        shadowFactor += arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.zw * jitterRadius, 0.0, 0.0), lightProject, normal, lightDir);
-    }
-    
-    float testAvg = shadowFactor / float(nStrata);
-    if (testAvg < 0.0005 || testAvg > 0.9995) {
-        return testAvg; // fully in shadow or light
-    }
-    
-    // Reset shadowFactor, reuse jitterUVW.z, and continue with full sampling
-    shadowFactor = testAvg * float(nStrata);
-
-    for (uint i = 0; i < nJitterSample; ++i) {
-        vec4 jitter = texture(samplerShadowJitter, jitterUVW);
-        jitterUVW.z += jitterStepW;
-
-        shadowFactor += arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.xy * jitterRadius, 0.0, 0.0), lightProject, normal, lightDir);
-        shadowFactor += arrayShadowCompare(texCascadedShadow, samplerShadowMap, targetCascade, lightSpaceCoord + vec4(jitter.zw * jitterRadius, 0.0, 0.0), lightProject, normal, lightDir);
-    }
-
-    return shadowFactor / float(nStrata * nStrata);
+    T = normalize(cross(up, N));
+    B = cross(N, T);
 }
-*/
+
+float pcssCubeShadowFactor(
+    Light light,
+    vec3 lightToFrag, // fragment position - light position
+    vec3 normal,
+    float lightRadius) {
+
+    float receiverDistance = length(lightToFrag);
+    vec3 receiverDirection = lightToFrag / receiverDistance;
+
+    if (receiverDistance >= light.influenceDistance)
+        return 1.0;
+
+    vec3 tangent;
+    vec3 bitangent;
+    makeBasis(receiverDirection, tangent, bitangent);
+
+    float cosTheta = clamp(
+        dot(normal, -receiverDirection),
+        0.0,
+        1.0);
+
+    // Bias is in world-distance units because cube depth is linear distance.
+    float constantBias = 0.005;
+    float slopeBias    = 0.02;
+
+    float bias =
+        constantBias +
+        slopeBias * (1.0 - cosTheta);
+
+    uint nStrata = sUbo.shadowJitter.nStrataPerDim;
+    uint nPairs = (nStrata * nStrata) / 2;
+
+    vec2 nTiles = vec2(textureSize(texDepth, 0)) / float(sUbo.shadowJitter.tileSize);
+
+    float jitterStepW = 1.0 / float(nPairs);
+    vec3 jitterUVW = vec3(inUV * nTiles, 0.0);
+
+    float searchRadiusTangent = lightRadius / receiverDistance;
+
+    // Prevent pathological radii near the light.
+    searchRadiusTangent = min(searchRadiusTangent, 0.25);
+
+    // ---------- blocker search ----------
+
+    float blockerDepthSum = 0.0;
+    uint blockerCount = 0;
+
+    for (uint i = 0; i < nPairs; ++i) {
+        vec4 jitter = texture(samplerShadowJitter, jitterUVW);
+        jitterUVW.z += jitterStepW;
+
+        vec3 sampleDirection0 =
+            receiverDirection +
+            tangent   * (jitter.x * searchRadiusTangent) +
+            bitangent * (jitter.y * searchRadiusTangent);
+
+        vec3 sampleDirection1 =
+            receiverDirection +
+            tangent   * (jitter.z * searchRadiusTangent) +
+            bitangent * (jitter.w * searchRadiusTangent);
+
+        float d0 = texture(samplerCubeArray(texCubeShadow, samplerShadowMap), vec4(sampleDirection0, float(light.cubeShadowId))).r * light.influenceDistance;
+        float d1 = texture(samplerCubeArray(texCubeShadow, samplerShadowMap), vec4(sampleDirection1, float(light.cubeShadowId))).r * light.influenceDistance;
+
+        if (d0 < receiverDistance - bias) {
+            blockerDepthSum += d0;
+            blockerCount++;
+        }
+
+        if (d1 < receiverDistance - bias) {
+            blockerDepthSum += d1;
+            blockerCount++;
+        }
+    }
+
+    if (blockerCount == 0u)
+        return 1.0;
+
+    float averageBlockerDistance =
+        blockerDepthSum / float(blockerCount);
+
+    // penumbra
+    float blockerSeparation = receiverDistance - averageBlockerDistance;
+    float penumbraRadiusWorld = lightRadius * blockerSeparation / averageBlockerDistance;
+    float filterRadiusTangent = penumbraRadiusWorld / receiverDistance;
+
+    filterRadiusTangent = min(filterRadiusTangent, 0.25);
+
+    // PCF
+    jitterUVW = vec3(inUV * nTiles, 0.0);
+
+    float visibility = 0.0;
+    uint sampleCount = 0u;
+
+    for (uint i = 0u; i < nPairs; ++i)
+    {
+        vec4 jitter = texture(samplerShadowJitter, jitterUVW);
+        jitterUVW.z += jitterStepW;
+
+        vec3 sampleDirection0 =
+            receiverDirection +
+            tangent   * (jitter.x * filterRadiusTangent) +
+            bitangent * (jitter.y * filterRadiusTangent);
+
+        vec3 sampleDirection1 =
+            receiverDirection +
+            tangent   * (jitter.z * filterRadiusTangent) +
+            bitangent * (jitter.w * filterRadiusTangent);
+
+        float d0 = texture(samplerCubeArray(texCubeShadow, samplerShadowMap), vec4(sampleDirection0, float(light.cubeShadowId))).r * light.influenceDistance;
+        float d1 = texture(samplerCubeArray(texCubeShadow, samplerShadowMap), vec4(sampleDirection1, float(light.cubeShadowId))).r * light.influenceDistance;
+
+        visibility +=
+            d0 < receiverDistance - bias ? 0.0 : 1.0;
+
+        visibility +=
+            d1 < receiverDistance - bias ? 0.0 : 1.0;
+
+        sampleCount += 2u;
+    }
+
+    return visibility / float(sampleCount);
+}
+
+///////////////////////
+
+
+
 
 // 0.0 -- in shadow, 1.0 -- not in shadow
 // TODO: color debug, return vec3
@@ -551,12 +535,6 @@ float cascadedShadowFactor(float zView, vec4 worldSpaceCoord, vec3 normal, vec3 
     
     vec4 lightSpaceCoord = sUbo.cascadedShadow.cascades[targetCascade].lightSpaceView * worldSpaceCoord;
 
-    // float shadowFactor = pcfShadowFactor(
-    //                             targetCascade,
-    //                             lightSpaceCoord,
-    //                             sUbo.cascadedShadow.cascades[targetCascade].lightSpaceProject,
-    //                             normal,
-    //                             lightDir);
     float shadowFactor = pcssShadowFactor(
                                  targetCascade,
                                  lightSpaceCoord,
@@ -570,6 +548,10 @@ float cascadedShadowFactor(float zView, vec4 worldSpaceCoord, vec3 normal, vec3 
 float cubeShadowFactor(vec4 worldSpaceCoord, Light light, vec3 normal) {
     vec3 lightToFrag = worldSpaceCoord.xyz - light.center;
 
+    return pcssCubeShadowFactor(light, lightToFrag, normal, 0.05/*temp*/);
+
+
+    /*
     float sampleDepth = texture(
         samplerCubeArray(texCubeShadow, samplerShadowMap),
         vec4(lightToFrag, float(light.cubeShadowId))
@@ -577,9 +559,12 @@ float cubeShadowFactor(vec4 worldSpaceCoord, Light light, vec3 normal) {
 
     float receiverDepth = length(lightToFrag) / sUbo.cubeMaxRadialDepths[light.cubeShadowId];
 
-    //////////
+    vec2 shadowMapSize = vec2(textureSize(samplerCubeArray(texCubeShadow, samplerShadowMap), 0).xy);
+    float texel = 1.0 / shadowMapSize.x;
+
     float cosTheta = clamp(dot(normal, -normalize(lightToFrag)), 0.0, 1.0);
-    float bias = max(0.005 * (1.0 - cosTheta), 0.001);
+    // float bias = max(0.005 * (1.0 - cosTheta), 0.001);
+    float bias = max(10.0 * texel * (1.0 - cosTheta), texel * 3);
 
     // float sampleDepth =
     //     texture(sampler2DArray(texShadow, samp), vec3(shadowUV, layer)).r;
@@ -589,9 +574,9 @@ float cubeShadowFactor(vec4 worldSpaceCoord, Light light, vec3 normal) {
     } else {
         return 1.0;
     }
-    ///////////////
 
     // return currentDepth > storedDepth ? 0.0 : 1.0;
+    */
 }
 
 void main() {
