@@ -11,9 +11,10 @@ Notice the pixel perfect shadows, which is a signature visual cue of ray queries
 
 By changing the ray origins from the camera to each probe’s location, and replacing screen pixels with samples on a sphere, the same ray query architecture can be used to sample radiance from probes at arbitrary points in space.
 
-In this example, I placed a 16 × 8 × 16 grid of probes throughout the Sponza scene and traced 192 rays from each probe. The four textures generated from a single tracing pass contains the hit points’ positions, normals, albedo, and metallic-roughness values, as shown below.
+In this example, I placed a 16 × 8 × 16 grid of probes throughout the Sponza scene and traced 192 rays from each probe. The four textures generated from a single tracing pass contains the hit points’ direct radiance, positions, normals, albedo, and metallic-roughness values, as shown below.
 
 <p align="center">
+  <img src="illustrations/ray_query_hit_radiance.png" alt="ray hit radiance" width="90%"><br>
   <img src="illustrations/ray_query_hit_position.png" alt="ray hit positions" width="90%"><br>
   <img src="illustrations/ray_query_hit_normal.png" alt="ray hit normals" width="90%"><br>
   <img src="illustrations/ray_query_hit_albedo.png" alt="ray hit albedo" width="90%"><br>
@@ -89,7 +90,14 @@ A similar idea also appears in rigid-body collision resolution, where warm start
 ## Multi-Bounce
 At first, I thought single-bounce indirect lighting was visually convincing enough. However, while adding skylight to the Sponza scene, I realized that it could not reach regions without a direct line of sight to the sky. Only through multiple bounces can skylight find its way into every corner of the scene.
 
-Multi-bounce lighting is easily achieved by adding a probe sampling pass and additively blending its output with the existing direct-lighting query results. With this approach, I can in theory recreate the scene demonstrated by the DDGI authors, where an entire bathroom is illuminated using only skylight.
+Multi-bounce lighting is easily achieved by adding a probe sampling pass and additively blending its output with the existing direct-lighting query results. Left shows a snippet of direct light radiance captured. Right shows the same snippet with indirect radiance from previous frame blended in
+
+<p align="center">
+  <img src="illustrations/snippet_direct.png" alt="snippet direct" width="40%">
+  <img src="illustrations/snippet_indirect.png" alt="snippet indirect" width="40%">
+</p>
+
+With this approach, I can in theory recreate the scene demonstrated by the DDGI authors, where an entire bathroom is illuminated using only skylight.
 
 Below is a comparison between single-bounce and multi-bounce lighting. Neither case uses direct lighting. The back of the curtain is supposed to be illuminated by light bouncing off surfaces in the atrium on the other side.
 
@@ -118,10 +126,10 @@ Every point light in the second image is set to have a very limited influence ra
 
 ## Cascaded Shadow Maps
 
+
 ## Cube Shadow Maps
 
 ## PCSS and Area Light Shadow Approximation
-
 
 
 
