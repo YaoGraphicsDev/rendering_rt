@@ -99,7 +99,13 @@ Below is a comparison between single-bounce and multi-bounce lighting. Neither c
 </p>
 
 ## Putting It All Together
-TODO
+
+Every point light in the second image is set to have a very limited influence radius. They can only directly light up the arch roof above them. That is the reason why the basin in the far corner does not cast a defined shadow. Indirect lighting alone creates this dim and soft aesthetic like a wine cellar.
+<p align="center">
+  <img src="illustrations/full_1.png" alt="full" width="90%"><br>
+  <img src="illustrations/full_2.png" alt="full_1" width="90%"><br>
+  <img src="illustrations/full_3.png" alt="full_2" width="90%">
+</p>
 
 ## Caveats and Possible Improvements
 1. Reflective probes
