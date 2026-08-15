@@ -25,6 +25,7 @@ RayQueryDirect::RayQueryDirect(const PassConfig& cfg) {
 		_readonly_desc_sets[i] = _desc_pool->allocate(_pipeline->desc_set_layouts.at(DescriptorSetRate::ComputeRead));
 		_readonly_desc_sets[i]->bind_buffer(TraceOneBounceComp::InstanceInfoBuffer::Binding,	_res->scene_acc->_per_frame_objs[i].insts->_buf);
 		_readonly_desc_sets[i]->bind_buffer(TraceOneBounceComp::GeometryInfoBuffer::Binding,	_res->scene_acc->_per_frame_objs[i].geos->_buf);
+		_readonly_desc_sets[i]->bind_buffer(TraceOneBounceComp::LightBuffer::Binding,			_res->scene_mgr->_per_frame_bos[i].lights->_buf);
 		_readonly_desc_sets[i]->bind_buffer(TraceOneBounceComp::NormalBuffer::Binding,			_res->mesh_mgr->_vb->buffers[1]);
 		_readonly_desc_sets[i]->bind_buffer(TraceOneBounceComp::UVBuffer::Binding,				_res->mesh_mgr->_vb->buffers[2]);
 		_readonly_desc_sets[i]->bind_buffer(TraceOneBounceComp::IndexBuffer::Binding,			_res->mesh_mgr->_ib);
@@ -51,9 +52,6 @@ void RayQueryDirect::commands(CommandContext& ctx) {
 
 	TraceOneBounceComp::PushConstants pc;
 	pc.rayTexSize = { ctx.width, ctx.height };
-	pc.lightDir = vec3_to_array(_res->scene_mgr->_node_metas.at(lm.node.id).world_transform * glm::vec4(lm.direction, 0.0));
-	pc.lightIntensity = iter->intensity;
-	pc.lightColor = vec3_to_array(iter->color);
 
 	ctx.cmd_buf->cmd_push_constant(_pipeline, pc);
 	ctx.cmd_buf->cmd_bind_compute_pipeline(_pipeline);

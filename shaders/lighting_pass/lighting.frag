@@ -16,49 +16,15 @@ layout (push_constant) uniform PushConstants {
     vec2 zRangeAbs; // (zNear, zFar), should be positive
 } consts;
 
-const uint MAX_LIGHTS = 64;
-const uint LIGHT_TYPE_POINT = 0;
-const uint LIGHT_TYPE_DIR   = 1;
-const uint LIGHT_TYPE_AREA  = 2;
+#include "types.glsl" //! #include "../common/types.glsl" // replacement comment for visual studio glsl extension
+
 const float LCT_LUT_SIZE  = 64.0;
 const float LCT_LUT_SCALE = (LCT_LUT_SIZE - 1.0) / LCT_LUT_SIZE;
 const float LCT_LUT_BIAS  = 0.5 / LCT_LUT_SIZE;
 
-// layout(std430, set = 3, binding = 18) buffer LightBSCountBuffer { // atomicAdd() operation. Cant have writeonly keyword
-//     Count visibleLightIdCount[]; // only one element, set to zero
-// };
-
-struct Light {
-    uint type; // 0 -- point, 1 -- directional, 2 -- area
-    float intensity;
-    vec3 color;
-    vec3 center; // in world space
-
-    // Doesnt guarantee right-handedness
-    vec3 direction;
-    vec3 planeBasisX;
-    vec3 planeBasisY; 
-    vec2 halfDims;    // area light exclusive (half width, half height)
-    float influenceDistance; // bounding sphere radius
-    
-    uint cubeShadowId;
-};
 layout(std430, set = 0, binding = 0) buffer readonly LightBuffer {
     Light lights[];
 };
-
-// layout (set = 0, binding = 0) uniform LightUBO {
-//     uint type; // 0 -- point, 1 -- directional, 2 -- area
-//     float intensity;
-//     vec3 color;
-//     uint nVertices; // non-zero for area light only
-//     /*
-//         point:          pose[0] -- position
-//         directional:    pose[0] -- direction
-//         area:           pose[]  -- polygon vertices. In world space
-//     */
-//     vec3 pose[MAX_AREA_LIGHT_VERTICES_COUNT];
-// } lUbos[];
 
 struct Cascade {
     float zBegin;
@@ -82,6 +48,7 @@ struct ShadowJitter {
     float radius;
 };
 
+const uint MAX_LIGHTS = 64;
 layout(set = 0, binding = 1) uniform ShadowUBO {
     // pcf shadow jitter
     ShadowJitter shadowJitter;
@@ -119,6 +86,7 @@ layout(std430, set = 3, binding = 16) readonly buffer LightAssignmentBuffer {
 }; 
 
 #include "math_utils.glsl" //! #include "../common/math_utils.glsl" // replacement comment for visual studio glsl extension
+#include "lighting.glsl" //! #include "../common/lighting.glsl"
 
 uint findLightCluster(vec2 screenUV, float viewZ) {
     uvec2 clusterXY = uvec2(screenUV * vec2(consts.nClusters.xy));
@@ -174,13 +142,6 @@ float BRDFGeometry(vec3 v, vec3 l, vec3 h, vec3 n, float roughness) {
     float G = G2(n, v, l, roughness);
     float d = 4.0 * clamp(dot(n, v), 0.0, 1.0) * clamp(dot(n, l), 0.0, 1.0) + 1E-5;
     return D * G / d;
-}
-
-// Filament https://google.github.io/filament/Filament.md.html#listing_glslpunctuallight
-float squareFalloffAttenuation(float distanceSquare, float lightInvRadius) {
-    float factor = distanceSquare * lightInvRadius * lightInvRadius;
-    float smoothFactor = max(1.0 - factor * factor, 0.0);
-    return (smoothFactor * smoothFactor) / max(distanceSquare, 1e-4);
 }
 
 // LTC. LUTs sampled and generated in a manner consistent with GGX choices listed above

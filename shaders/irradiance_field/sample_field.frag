@@ -174,5 +174,8 @@ void main() {
     F0 = mix(F0, albedo, metallic);
     vec3 BRDFDiff = netIrradiance * (vec3(1.0) - F0) * (1.0 - metallic) * albedo; // Lambertian BRDF 1/PI factor and netIrradiance PI factor cancel out
 
+    // if (consts.viewType == VIEW_FROM_PROBE) {
+    // result = vec4(0.0, 0.0, 0.0, 1.0);
+    // } else 
     result = vec4(BRDFDiff, 1.0f);
 }

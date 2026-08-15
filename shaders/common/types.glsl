@@ -33,4 +33,24 @@ struct MaterialInfo {
 	SamplerIds samplerIds;
 };
 
+const uint LIGHT_TYPE_POINT = 0;
+const uint LIGHT_TYPE_DIR   = 1;
+const uint LIGHT_TYPE_AREA  = 2;
+
+struct Light {
+    uint type; // 0 -- point, 1 -- directional, 2 -- area
+    float intensity;
+    vec3 color;
+    vec3 center; // in world space
+
+    // Doesnt guarantee right-handedness
+    vec3 direction;
+    vec3 planeBasisX;
+    vec3 planeBasisY; 
+    vec2 halfDims;    // area light exclusive (half width, half height)
+    float influenceDistance; // bounding sphere radius
+    
+    uint cubeShadowId;
+};
+
 #endif

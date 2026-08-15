@@ -26,8 +26,8 @@ struct LightClusterParams {
 };
 
 struct IrradianceFieldParams {
-    static constexpr glm::vec3 probe_start = glm::vec3(-11.955299, -0.706239, -5.622647);
-    static constexpr glm::vec3 probe_step = glm::vec3(1.568164, 1.715203, 0.754157);
+    static constexpr glm::vec3 probe_start = glm::vec3(-11.955299, -0.706239, -5.6519);
+    static constexpr glm::vec3 probe_step = glm::vec3(1.586456, 1.715203, 0.754157);
     // The number give by DDGI was 64. At that rate, sample rays may miss some high frequency details around it..
     // Take sponza for example, probes hiding in shadows on the second floor looking down on the well lit atrium below. Lots of hight frequency dark & lit details on it
     static constexpr uint32_t rays_per_probe = 192; 
