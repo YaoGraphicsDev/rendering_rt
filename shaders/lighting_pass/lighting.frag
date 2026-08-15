@@ -539,76 +539,9 @@ void main() {
     // outLit = vec4(lightAssign[clusterId].nLights, 0.0, 0.0, 1.0);
     // vec3 albedo = texelFetch(sampler2D(texAlbedo, samplerGBuffer), pixel, 0).xyz;
     // outLit = vec4(clusterCoordToColor(clusterId) * albedo, 1.0);
-
-
-
-    ///////////////// temp: test light clustering
-    // vec3 albedo = texelFetch(sampler2D(texAlbedo, samplerGBuffer), pixel, 0).xyz;
-    // outLit = vec4(albedo, 1.0f);
-    // // draw cluster
-    // uint clusterId = findLightCluster(inUV, viewSpaceCoord.z);
-    // for (uint i = 0; i < lightAssign[clusterId].nLights; ++i) {
-    //     uint lightId = lightAssign[clusterId].lightIds[i];
-    //     outLit *= vec4(lights[lightId].color, 1.0f);
-    // }
-    // 
-    // for (uint i = 0; i < lightAssign[clusterId].nLights; ++i) {
-    //     // draw actual light influence
-    //     uint lightId = lightAssign[clusterId].lightIds[i];
-    //     vec3 d  = worldSpaceCoord.xyz - lights[lightId].center;
-    //     if (length(d) <= lights[lightId].influenceDistance) {
-    //         if (lights[lightId].type == LIGHT_TYPE_AREA) {
-    //             if (dot(d, lights[lightId].lightDirection) >= 0.0) {
-    //                 outLit *= vec4(lights[lightId].color, 1.0f);
-    //             }
-    //         } else {
-    //             outLit *= vec4(lights[lightId].color, 1.0f);
-    //         }
-    //     }
-    // }
     
     vec3 normal = texelFetch(sampler2D(texNormal, samplerGBuffer), pixel, 0).xyz;
     normal = normalize(normal);
-
-    /*
-    float zView = -viewSpaceCoord.z;
-    uint targetCascade = 0;
-    for (uint i = 0; i < sUbo.cascadedShadow.nCascades; ++i) {
-        if (sUbo.cascadedShadow.cascades[i].zBegin < zView && sUbo.cascadedShadow.cascades[i].zEnd >= zView) {
-            targetCascade = i;
-            break;
-        }
-    }
-
-    vec4 lightSpaceCoord0 = sUbo.cascadedShadow.cascades[targetCascade].lightSpaceView * worldSpaceCoord;
-    float shadowFactor0 = pcf_shadow_factor(
-                            targetCascade,
-                            lightSpaceCoord0,
-                            sUbo.cascadedShadow.cascades[targetCascade].lightSpaceProject,
-                            normal,
-                            -normalize(lUbos[nonuniformEXT(sUbo.dLightId)].pose[0]));
-
-    float shadowFactor = shadowFactor0;
-    // check if cascade blending is required
-    if (sUbo.cascadedShadow.cascades[targetCascade].zEnd - zView < sUbo.cascadedShadow.blendDepth &&
-        targetCascade < sUbo.cascadedShadow.nCascades - 1) {
-
-		vec4 lightSpaceCoord1 = sUbo.cascadedShadow.cascades[targetCascade + 1].lightSpaceView * worldSpaceCoord;
-        float shadowFactor1 = pcf_shadow_factor(
-                            targetCascade + 1,
-                            lightSpaceCoord1,
-                            sUbo.cascadedShadow.cascades[targetCascade + 1].lightSpaceProject,
-                            normal,
-                            -normalize(lUbos[nonuniformEXT(sUbo.dLightId)].pose[0]));
-        float blendFactor = clamp(1.0f - (sUbo.cascadedShadow.cascades[targetCascade].zEnd - zView) / sUbo.cascadedShadow.blendDepth, 0.0f, 1.0f);
-        shadowFactor = mix(shadowFactor0, shadowFactor1, smoothstep(0.0f, 1.0f, blendFactor));
-    }
-
-    // TODO: temp, tranparent shadow to mimic GI
-    shadowFactor = clamp(shadowFactor, 0.05f, 1.0f);
-    */
-
-
     vec3 albedo = texelFetch(sampler2D(texAlbedo, samplerGBuffer), pixel, 0).xyz;
     vec2 metallicRoughness = texelFetch(sampler2D(texMetallicRoughness, samplerGBuffer), pixel, 0).xy;
     float metallic = metallicRoughness.x;
@@ -657,20 +590,43 @@ void main() {
             float shadow = cascadedShadowFactor(viewSpaceCoord.z, worldSpaceCoord, normal, light.direction);
             litColor += (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f) * shadow;
         }
-
-        // outLit *= vec4(lights[lightId].color, 1.0f);
     }
     
     vec3 ambient = vec3(0.0) * albedo;
     outLit = vec4((ambient + litColor), 1.0f);
 
-    // for (uint i = 0; i < lightAssign[clusterId].nLights; ++i) {
+
+    ///////////////// temp: test light clustering
+    // outLit = vec4(albedo, 1.0f);
+    // // draw cluster
+    // for (uint i = 0; i < lightAssignments[clusterId].nLights; ++i) {
+    //     uint lightId = lightAssignments[clusterId].lightIds[i];
+    //     outLit *= vec4(lights[lightId].color, 1.0f);
+    // }
+    // 
+    // for (uint i = 0; i < lightAssignments[clusterId].nLights; ++i) {
     //     // draw actual light influence
-    //     uint lightId = lightAssign[clusterId].lightIds[i];
+    //     uint lightId = lightAssignments[clusterId].lightIds[i];
     //     vec3 d  = worldSpaceCoord.xyz - lights[lightId].center;
     //     if (length(d) <= lights[lightId].influenceDistance) {
     //         if (lights[lightId].type == LIGHT_TYPE_AREA) {
-    //             if (dot(d, lights[lightId].lightDirection) >= 0.0) {
+    //             if (dot(d, lights[lightId].direction) >= 0.0) {
+    //                 outLit *= vec4(lights[lightId].color, 1.0f);
+    //             }
+    //         } else {
+    //             outLit *= vec4(lights[lightId].color, 1.0f);
+    //         }
+    //     }
+    // }
+
+
+    // for (uint i = 0; i < lightAssignments[clusterId].nLights; ++i) {
+    //     // draw actual light influence
+    //     uint lightId = lightAssignments[clusterId].lightIds[i];
+    //     vec3 d  = worldSpaceCoord.xyz - lights[lightId].center;
+    //     if (length(d) <= lights[lightId].influenceDistance) {
+    //         if (lights[lightId].type == LIGHT_TYPE_AREA) {
+    //             if (dot(d, lights[lightId].direction) >= 0.0) {
     //                 outLit *= vec4(lights[lightId].color, 1.0f);
     //             }
     //         } else {
@@ -730,22 +686,4 @@ void main() {
         outLit = vec4(lightingColor, 1.0f);
     }
     */
-    //////////////////////////////
-
-
-    
-    // vec3 diffuse = albedo.xyz * fUbo.light.color * vec3(fUbo.light.intensity) * max(dot(normal, -fUbo.light.direction), 0.0f);
-    // diffuse = diffuse * vec3(shadowFactor);
-    // 
-    // if (targetCascade == 0) {
-    //     diffuse = diffuse * vec3(1.7f, 0.6f, 0.6f);
-    // }
-    // if (targetCascade == 1) {
-    //     diffuse = diffuse * vec3(0.6f, 1.7f, 0.6f);
-    // }
-    // if (targetCascade == 2) {
-    //     diffuse = diffuse * vec3(0.6f, 0.6f, 1.7f);
-    // }
-
-    // outLit = vec4(diffuse, 1.0f);
 }
