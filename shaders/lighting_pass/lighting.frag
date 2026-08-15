@@ -306,8 +306,8 @@ float pcssShadowFactor(
     float blockerDepthSum = 0.0;
     uint blockerCount = 0;
 
-    uint nSearchPairs = nStrata / 2; // number of sample pairs on the the outer-most ring
-    for (uint i = 0; i < nPairs; ++i) {
+    uint nSearchPairs = nStrata; // search outer-most and second outer-most ring
+    for (uint i = 0; i < nSearchPairs; ++i) {
         vec4 jitter = texture(samplerShadowJitter, jitterUVW);
         jitterUVW.z += jitterStepW;
 
@@ -410,12 +410,8 @@ float pcssCubeShadowFactor(
         1.0);
 
     // Bias is in world-distance units because cube depth is linear distance.
-    float constantBias = 0.005;
-    float slopeBias    = 0.02;
-
-    float bias =
-        constantBias +
-        slopeBias * (1.0 - cosTheta);
+    float bias = 0.05 * (1- cosTheta) + 0.01; // TODO: ad-hoc bias
+    // float bias = max(0.005, (2.0 * receiverDistance / float(2048)) * mix(2.0, 0.5, clamp(cosTheta, 0.0, 1.0)));
 
     uint nStrata = sUbo.shadowJitter.nStrataPerDim;
     uint nPairs = (nStrata * nStrata) / 2;
@@ -425,28 +421,28 @@ float pcssCubeShadowFactor(
     float jitterStepW = 1.0 / float(nPairs);
     vec3 jitterUVW = vec3(inUV * nTiles, 0.0);
 
-    float searchRadiusTangent = lightRadius / receiverDistance;
+    float searchRadiusTangent = lightRadius / receiverDistance; // TODO: max search radius incorrect
 
     // Prevent pathological radii near the light.
     searchRadiusTangent = min(searchRadiusTangent, 0.25);
 
-    // ---------- blocker search ----------
-
+    // blocker search
     float blockerDepthSum = 0.0;
     uint blockerCount = 0;
 
-    for (uint i = 0; i < nPairs; ++i) {
+    uint nSearchPairs = nStrata; // search outer-most and second outer-most ring
+    for (uint i = 0; i < nSearchPairs; ++i) {
         vec4 jitter = texture(samplerShadowJitter, jitterUVW);
-        jitterUVW.z += jitterStepW;
+        jitterUVW.z += jitterStepW; // TODO: try use texelFetch for this
 
         vec3 sampleDirection0 =
             receiverDirection +
-            tangent   * (jitter.x * searchRadiusTangent) +
+            tangent * (jitter.x * searchRadiusTangent) +
             bitangent * (jitter.y * searchRadiusTangent);
 
         vec3 sampleDirection1 =
             receiverDirection +
-            tangent   * (jitter.z * searchRadiusTangent) +
+            tangent * (jitter.z * searchRadiusTangent) +
             bitangent * (jitter.w * searchRadiusTangent);
 
         float d0 = texture(samplerCubeArray(texCubeShadow, samplerShadowMap), vec4(sampleDirection0, float(light.cubeShadowId))).r * light.influenceDistance;
@@ -466,8 +462,7 @@ float pcssCubeShadowFactor(
     if (blockerCount == 0u)
         return 1.0;
 
-    float averageBlockerDistance =
-        blockerDepthSum / float(blockerCount);
+    float averageBlockerDistance = blockerDepthSum / float(blockerCount);
 
     // penumbra
     float blockerSeparation = receiverDistance - averageBlockerDistance;
@@ -482,40 +477,30 @@ float pcssCubeShadowFactor(
     float visibility = 0.0;
     uint sampleCount = 0u;
 
-    for (uint i = 0u; i < nPairs; ++i)
-    {
+    for (uint i = 0; i < nPairs; ++i) {
         vec4 jitter = texture(samplerShadowJitter, jitterUVW);
         jitterUVW.z += jitterStepW;
 
         vec3 sampleDirection0 =
             receiverDirection +
-            tangent   * (jitter.x * filterRadiusTangent) +
+            tangent * (jitter.x * filterRadiusTangent) +
             bitangent * (jitter.y * filterRadiusTangent);
 
         vec3 sampleDirection1 =
             receiverDirection +
-            tangent   * (jitter.z * filterRadiusTangent) +
+            tangent * (jitter.z * filterRadiusTangent) +
             bitangent * (jitter.w * filterRadiusTangent);
 
         float d0 = texture(samplerCubeArray(texCubeShadow, samplerShadowMap), vec4(sampleDirection0, float(light.cubeShadowId))).r * light.influenceDistance;
         float d1 = texture(samplerCubeArray(texCubeShadow, samplerShadowMap), vec4(sampleDirection1, float(light.cubeShadowId))).r * light.influenceDistance;
 
-        visibility +=
-            d0 < receiverDistance - bias ? 0.0 : 1.0;
-
-        visibility +=
-            d1 < receiverDistance - bias ? 0.0 : 1.0;
-
-        sampleCount += 2u;
+        visibility += d0 < receiverDistance - bias ? 0.0 : 1.0;
+        visibility += d1 < receiverDistance - bias ? 0.0 : 1.0;
+        sampleCount += 2;
     }
 
     return visibility / float(sampleCount);
 }
-
-///////////////////////
-
-
-
 
 // 0.0 -- in shadow, 1.0 -- not in shadow
 // TODO: color debug, return vec3
