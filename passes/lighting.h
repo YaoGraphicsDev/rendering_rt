@@ -28,12 +28,6 @@ public:
 
 		std::shared_ptr<PerspectiveCamera> cam;
 
-		// glm::mat4 inv_view; // camera
-		// glm::mat4 inv_proj;
-		// glm::vec3						camera_pos;
-		// float zNear;
-		// float zFar;
-
 		glm::uvec3 n_clusters; // light cluster dimensions
 		float width = 0.0f;
 		float height = 0.0f;

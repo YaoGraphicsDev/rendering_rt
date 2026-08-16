@@ -8,3 +8,4 @@
 #include "ray_generation.h"
 #include "ray_query_direct.h"
 #include "irradiance_fields.h"
+#include "imgui_draw.hpp"

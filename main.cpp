@@ -12,13 +12,11 @@
 
 using namespace otcv;
 
-// works for now
-struct CSMParams {
-    static constexpr uint32_t n_cascades = 4;
-    static constexpr uint32_t resolution = 2048;
-    static constexpr float blend_overlap = 0.5f; // we dont really need to blend between cascades here. Just a buffer zone
+struct UIControls {
+    bool ddgi_on = true;
+    bool rebuild_framegraph = false;
 };
-// std::vector<CSMUtils::CascadeContext> csm_ctxs;
+UIControls ui_controls;
 
 struct LightClusterParams {
     static constexpr glm::uvec3 n_clusters = glm::uvec3(32, 32, 32);
@@ -204,11 +202,6 @@ int main() {
             ImageBuilder()
             .size(window_width, window_height, 1)
             .format(VK_FORMAT_R16G16B16A16_SFLOAT));
-        
-        fg::ResourceHandle tonemapped = fg->add_resource("ToneMapped",
-            ImageBuilder()
-            .size(window_width, window_height, 1)
-            .format(otcv_context.swapchain->image_info.format));
         
         // frustum culling
         {
@@ -557,7 +550,7 @@ int main() {
             });
         }
 
-        // TODO: remember to destroy these
+        // TODO: remember to destroy these. Otherwise this will cause memory leak upon framegraph rebuild
         Image* irrad_atlas_0 = ImageBuilder()
             .size(IrradianceFieldParams::atlas_size_irrad.x, IrradianceFieldParams::atlas_size_irrad.y, 1)
             .format(IrradianceFieldParams::irrad_atlas_format)
@@ -798,6 +791,10 @@ int main() {
         }
 
         // tonemapping pass
+        fg::ResourceHandle tonemapped = fg->add_resource("ToneMapped",
+            ImageBuilder()
+            .size(window_width, window_height, 1)
+            .format(otcv_context.swapchain->image_info.format));
         {
             ToneMapping::PassConfig cfg;
             cfg.res_context = res_ctx;
@@ -810,7 +807,13 @@ int main() {
             // tone_mapping_pass.access(fg::ResourceAccessType::TextureIn, rt_ray_hit_radiance);
             // tone_mapping_pass.access(fg::ResourceAccessType::TextureIn, lit_with_probes);
             // tone_mapping_pass.access(fg::ResourceAccessType::TextureIn, lit_indirect);
-            tone_mapping_pass.access(fg::ResourceAccessType::TextureIn, lit_full);
+
+            if (ui_controls.ddgi_on) {
+                tone_mapping_pass.access(fg::ResourceAccessType::TextureIn, lit_full);
+            }
+            else {
+                tone_mapping_pass.access(fg::ResourceAccessType::TextureIn, lit);
+            }
             tone_mapping_pass.access(fg::ResourceAccessType::ColorOut, tonemapped);
             tone_mapping_pass.store_load_func(tonemapped, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
@@ -828,10 +831,64 @@ int main() {
             });
         }
 
-        if (!fg->set_as_backbuffer(tonemapped)) {
+        // imgui pass
+        fg::ResourceHandle ui_overlayed = fg->add_resource("UIOverlayed",
+            ImageBuilder()
+            .size(window_width, window_height, 1)
+            .format(otcv_context.swapchain->image_info.format));
+        {
+            std::shared_ptr<ImGuiDrawPass> igd = std::make_shared<ImGuiDrawPass>(fg_app->window());
+            fg::Pass& ui_overlay_pass = fg->add_pass("UIOverlayPass", fg::PassType::Graphics);
+            ui_overlay_pass.access(fg::ResourceAccessType::ColorInOut, tonemapped, ui_overlayed);
+            ui_overlay_pass.store_load_func(tonemapped, [](RenderingBegin::Attachment& attachment) {
+                attachment.load_store(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE);
+            });
+            ui_overlay_pass.render_area_func([window_width, window_height](RenderingBegin& begin) {
+                begin.area(window_width, window_height);
+            });
+            ui_overlay_pass.execute_func([app, igd](CommandBuffer* cmd, fg::PassContext& ctx) {
+                ImGuiDrawPass::CommandContext igd_ctx;
+                igd_ctx.cmd_buf = cmd;
+                igd_ctx.fg_frame_id = app->frame_slot();
+                igd->commands(igd_ctx);
+            });
+        }
+
+        if (!fg->set_as_backbuffer(ui_overlayed)) {
             assert(false);
         }
     };
+
+
+    auto immediate_gui = []() {
+        ImGuiIO& io = ImGui::GetIO();
+
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        {
+            ImGui::Begin("Hello ImGui");
+
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+
+            ImGui::Checkbox("DDGI", &ui_controls.ddgi_on);
+
+            if (ImGui::Button("Rebuild")) {
+                ui_controls.rebuild_framegraph = true;
+            }
+            else {
+                ui_controls.rebuild_framegraph = false;
+            }
+
+            //ImGui::Checkbox("Blend", &fg_config.blend);
+            //ImGui::Checkbox("Billow", &fg_config.billow);
+
+            ImGui::End();
+        }
+        ImGui::Render();
+
+        // return fg_config;
+    };
+
 
     SceneNodeHandle area_light_snh = scene_mgr->get_node_handle("LightPlane");
     SceneNodeHandle sun_snh = scene_mgr->get_node_handle("Sun");
@@ -843,6 +900,8 @@ int main() {
 
         float dt = 1.0f / 60.0f; // TODO: assume 60fps for now. Should be passed as update parameter
         free_roam->update(dt, cam->eye, cam->center, cam->up);
+
+        immediate_gui();
 
         // update camera
         cam->aspect = (float)width / (float)height;
@@ -859,6 +918,10 @@ int main() {
         scene_mgr->update(app->frame_slot());
         
         shadowmap_sys->update(app->frame_slot());
+
+        if (ui_controls.rebuild_framegraph) {
+            app->register_framegraph_rebuild(configure_framegraph);
+        }
     };
 
     fg_app->framegraph_initial_build(configure_framegraph);
