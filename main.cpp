@@ -14,6 +14,7 @@ using namespace otcv;
 
 struct UIControls {
     bool ddgi_on = true;
+    bool draw_probes = true;
     bool rebuild_framegraph = false;
 };
 UIControls ui_controls;
@@ -168,11 +169,6 @@ int main() {
             // That's how Unity URP store it https://docs.unity3d.com/Packages/com.unity.render-pipelines.universal@16.0/manual/rendering/deferred-rendering-path.html
             .format(VK_FORMAT_B10G11R11_UFLOAT_PACK32));
 
-        fg::ResourceHandle g_mat_flags = fg->add_resource("GMatFlags",
-            ImageBuilder()
-            .size(window_width, window_height, 1)
-            .format(VK_FORMAT_R8_UINT));
-
         fg::ResourceHandle g_depth = fg->add_resource("GDepth",
             ImageBuilder()
             .size(window_width, window_height, 1)
@@ -236,8 +232,7 @@ int main() {
                 fg->get_img_builder(g_normal)._image_info.format,
                 fg->get_img_builder(g_albedo)._image_info.format,
                 fg->get_img_builder(g_metallic_roughness)._image_info.format,
-                fg->get_img_builder(g_emissive)._image_info.format,
-                fg->get_img_builder(g_mat_flags)._image_info.format };
+                fg->get_img_builder(g_emissive)._image_info.format };
             cfg.depth_attachment_format = fg->get_img_builder(g_depth)._image_info.format;
             std::shared_ptr<GeometryPass> gp = std::make_shared<GeometryPass>(cfg);
 
@@ -263,10 +258,6 @@ int main() {
             g_pass.access(fg::ResourceAccessType::ColorOut, g_emissive);
             g_pass.store_load_func(g_emissive, [](RenderingBegin::Attachment& attachment) {
                 attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(0.0f, 0.0f, 0.0f, 1.0f);
-            });
-            g_pass.access(fg::ResourceAccessType::ColorOut, g_mat_flags);
-            g_pass.store_load_func(g_mat_flags, [](RenderingBegin::Attachment& attachment) {
-                attachment.load_store(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE).clear_value(uint32_t(0));
             });
             g_pass.access(fg::ResourceAccessType::DepthStencilOut, g_depth);
             g_pass.store_load_func(g_depth, [](RenderingBegin::Attachment& attachment) {
@@ -357,7 +348,6 @@ int main() {
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_normal);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_metallic_roughness);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, g_emissive);
-            lighting_pass.access(fg::ResourceAccessType::TextureIn, g_mat_flags);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, shadow_cascades);
             lighting_pass.access(fg::ResourceAccessType::TextureIn, shadow_cube_faces);
             {
@@ -860,40 +850,39 @@ int main() {
     };
 
 
-    auto immediate_gui = []() {
+    auto immediate_gui = [&]() {
         ImGuiIO& io = ImGui::GetIO();
 
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         {
-            ImGui::Begin("Hello ImGui");
-
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-
+            ImGui::Begin("DDGI");
+            ImGui::Text("%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
             ImGui::Checkbox("DDGI", &ui_controls.ddgi_on);
-
             if (ImGui::Button("Rebuild")) {
                 ui_controls.rebuild_framegraph = true;
             }
             else {
                 ui_controls.rebuild_framegraph = false;
             }
-
-            //ImGui::Checkbox("Blend", &fg_config.blend);
-            //ImGui::Checkbox("Billow", &fg_config.billow);
-
+            ImGui::End();
+        }
+        {
+            ImGui::Begin("Nodes");
+            for (auto& node : scene_mgr->_node_metas) {
+                bool temp;
+                ImGui::Checkbox(node.name.c_str(), &temp);
+            }
             ImGui::End();
         }
         ImGui::Render();
-
-        // return fg_config;
     };
 
 
-    SceneNodeHandle area_light_snh = scene_mgr->get_node_handle("LightPlane");
-    SceneNodeHandle sun_snh = scene_mgr->get_node_handle("Sun");
-    SceneNodeMeta sun_node = scene_mgr->get_node(sun_snh);
-    LightMeta& sun_light = scene_mgr->get_light(sun_snh);
+    //SceneNodeHandle area_light_snh = scene_mgr->get_node_handle("LightPlane");
+    //SceneNodeHandle sun_snh = scene_mgr->get_node_handle("Sun");
+    //SceneNodeMeta sun_node = scene_mgr->get_node(sun_snh);
+    //LightMeta& sun_light = scene_mgr->get_light(sun_snh);
     auto frame_update = [&](fg::Application* app) {
         uint32_t width = app->otcv_context().swapchain->image_info.extent.width;
         uint32_t height = app->otcv_context().swapchain->image_info.extent.height;

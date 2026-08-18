@@ -73,9 +73,8 @@ layout(set = 3, binding = 1) uniform texture2D texAlbedo;
 layout(set = 3, binding = 2) uniform texture2D texNormal;
 layout(set = 3, binding = 3) uniform texture2D texMetallicRoughness;
 layout(set = 3, binding = 4) uniform texture2D texEmissive;
-layout(set = 3, binding = 5) uniform utexture2D texMatFlags; //Currently unused. Currently only LSB in use: 0 -- lit, 1 -- unlit. Other bits available
-layout(set = 3, binding = 6) uniform texture2DArray texCascadedShadow;
-layout(set = 3, binding = 7) uniform textureCubeArray texCubeShadow;
+layout(set = 3, binding = 5) uniform texture2DArray texCascadedShadow;
+layout(set = 3, binding = 6) uniform textureCubeArray texCubeShadow;
 #define MAX_LIGHT_PER_CLUSTER 32
 struct LightAssignment {
     uint nLights;
@@ -172,7 +171,6 @@ vec3 findTangent(vec3 n, vec3 v) {
     return t;
 }
 
-#define MAX_AREA_LIGHT_VERTICES_COUNT 8
 vec3 ltcEvaluate(vec3 n, vec3 v, vec3 p, mat3 invM, vec3 light_verts[MAX_AREA_LIGHT_VERTICES_COUNT], uint n_vertices) {
     vec3 t1 = findTangent(n, v);
     vec3 t2 = cross(n, t1);
@@ -548,8 +546,6 @@ void main() {
     float perceptualRoughness = metallicRoughness.y;
     float alphaRoughness = perceptualRoughness * perceptualRoughness;
     vec3 emissive = texelFetch(sampler2D(texEmissive, samplerGBuffer), pixel, 0).xyz;
-    uint materialFlags = texelFetch(usampler2D(texMatFlags, samplerGBuffer), pixel, 0).x;
-    // bool unlit = ((materialFlags & 1u) == 1);
 
     vec3 litColor = vec3(0.0);
 
@@ -589,14 +585,47 @@ void main() {
             vec3 radiance = light.intensity * light.color;
             float shadow = cascadedShadowFactor(viewSpaceCoord.z, worldSpaceCoord, normal, light.direction);
             litColor += (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f) * shadow;
+        } else if (light.type == LIGHT_TYPE_AREA) {
+            vec3 l = light.center - worldSpaceCoord.xyz;
+            float dl2 = dot(l, l); // light distance ^ 2
+            if (dl2 > light.influenceDistance * light.influenceDistance) {
+                continue;
+            }
+
+            float ndotv = clamp(dot(normal, viewDir), 0.0, 1.0);
+            vec2 uv = vec2(perceptualRoughness, sqrt(1.0 - ndotv));
+            vec2 lctLutUV = uv * LCT_LUT_SCALE + LCT_LUT_BIAS;
+            vec4 lctP0 = texture(samplerLTCParams[0], lctLutUV);
+            vec4 lctP1 = texture(samplerLTCParams[1], lctLutUV);
+            mat3 invM = mat3( // scaled inv. Not tr1ue inv. One determinant short
+                vec3(lctP0.x,   0,          lctP0.y),
+                vec3(0,         lctP0.z,    0),
+                vec3(lctP0.w,   0,          lctP1.x)
+            );
+            // refer to "LTC Fresnel Approximation" by Stephen Hill
+            float nD = lctP1.y;
+            float fD = lctP1.z;
+            vec3 F0 = vec3(0.04f);
+            F0 = mix(F0, albedo, metallic);
+            vec3 fresnel = F0 * nD + (1 - F0) * fD; // specular proportion of reflected light
+            // specular term
+            vec3 spec = ltcEvaluate(normal, viewDir, worldSpaceCoord.xyz, invM, light.vertices, light.n_vertices);
+            spec *= fresnel;
+            // diffuse term
+            vec3 diff = ltcEvaluate(normal, viewDir, worldSpaceCoord.xyz, mat3(1.0f), light.vertices, light.n_vertices);
+            diff *= (vec3(1.0f) - fresnel) * (1.0f - metallic) * albedo; // TODO: not correct. Try approximate with (1.0f - metallic) * albedo
+            float attenuation = squareFalloffAttenuation(dl2, 1.0 / light.influenceDistance);
+            vec3 radiance = light.intensity * light.color * attenuation;
+            float shadow = cubeShadowFactor(worldSpaceCoord, light, normal);
+            litColor += radiance * (spec + diff) * shadow;
         }
     }
     
     vec3 ambient = vec3(0.0) * albedo;
-    outLit = vec4((ambient + litColor), 1.0f);
+    outLit = vec4((ambient + litColor + emissive), 1.0f);
 
 
-    ///////////////// temp: test light clustering
+    ////////////// temp: test light clustering
     // outLit = vec4(albedo, 1.0f);
     // // draw cluster
     // for (uint i = 0; i < lightAssignments[clusterId].nLights; ++i) {
@@ -618,8 +647,7 @@ void main() {
     //         }
     //     }
     // }
-
-
+    // 
     // for (uint i = 0; i < lightAssignments[clusterId].nLights; ++i) {
     //     // draw actual light influence
     //     uint lightId = lightAssignments[clusterId].lightIds[i];

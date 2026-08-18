@@ -36,6 +36,7 @@ struct MaterialInfo {
 const uint LIGHT_TYPE_POINT = 0;
 const uint LIGHT_TYPE_DIR   = 1;
 const uint LIGHT_TYPE_AREA  = 2;
+const uint MAX_AREA_LIGHT_VERTICES_COUNT = 8;
 
 struct Light {
     uint type; // 0 -- point, 1 -- directional, 2 -- area
@@ -45,9 +46,11 @@ struct Light {
 
     // Doesnt guarantee right-handedness
     vec3 direction;
-    vec3 planeBasisX;
-    vec3 planeBasisY; 
-    vec2 halfDims;    // area light exclusive (half width, half height)
+    vec3 vertices[MAX_AREA_LIGHT_VERTICES_COUNT];
+    uint n_vertices;
+    // vec3 planeBasisX;
+    // vec3 planeBasisY; 
+    // vec2 halfDims;    // area light exclusive (half width, half height)
     float influenceDistance; // bounding sphere radius
     
     uint cubeShadowId;

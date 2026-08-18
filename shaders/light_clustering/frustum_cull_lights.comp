@@ -1,23 +1,12 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 layout(local_size_x = 64) in;
 
 layout (push_constant) uniform PushConstants {
     vec4 frustum_faces[6]; // in world space
 } consts;
 
-struct Light {
-    uint type; // 0 -- point, 1 -- directional, 2 -- area
-    float intensity;
-    vec3 color;
-    vec3 center; // in world space
-    
-    // Doesnt guarantee right-handedness
-    vec3 lightDirection;
-    vec3 planeBasisX;
-    vec3 planeBasisY; 
-    vec2 halfDims;    // area light exclusive (half width, half height)
-    float influenceDistance; // bounding sphere radius
-};
+#include "types.glsl" //! #include "../common/types.glsl" // replacement comment for visual studio glsl extension
 layout(std430, set = 1, binding = 0) readonly buffer LightBuffer {
     Light lights[];
 };

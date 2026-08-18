@@ -14,7 +14,6 @@ layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outAlbedo;
 layout(location = 3) out vec4 outMetallicRoughness;
 layout(location = 4) out vec4 outEmissive;
-layout(location = 5) out uint outMatFlags;
 
 #include "types.glsl" //! #include "../common/types.glsl"
 
@@ -93,6 +92,4 @@ void main() {
 	} else {
 		outEmissive = vec4(cfg.emissiveColorStrength.xyz, 1.0f);
 	}
-
-	outMatFlags = cfg.unlit;
 }

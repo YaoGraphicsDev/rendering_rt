@@ -134,11 +134,34 @@ void SceneManager::bindless_build() {
 				light.type = (uint32_t)lm.type;
 				light.intensity = lm.intensity;
 				light.color = vec3_to_array(lm.color);
-				light.center = vec3_to_array(glm::vec3(snm.world_transform * glm::vec4(lm.center, 1.0f)));
-				light.direction =	vec3_to_array(glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.direction, 0.0f))));
-				light.planeBasisX = vec3_to_array(glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[0], 0.0f))));
-				light.planeBasisY = vec3_to_array(glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[1], 0.0f))));
-				light.halfDims = vec2_to_array(lm.half_dims);
+
+				glm::vec3 center = glm::vec3(snm.world_transform * glm::vec4(lm.center, 1.0f));
+				// direction -- z, base[0] -- x, base[1] -- y. Handedness not guaranteed
+				glm::vec3 basis_z = glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.direction, 0.0f)));
+				glm::vec3 basis_x = glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[0], 0.0f)));
+				glm::vec3 basis_y = glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[1], 0.0f)));
+				if (glm::dot(glm::cross(lm.direction, lm.plane_base[0]), lm.plane_base[1]) < 0.0) {
+					basis_y = -basis_y;
+				}
+				glm::vec3 half_dim_x = basis_x * lm.half_dims.x;
+				glm::vec3 half_dim_y = basis_y * lm.half_dims.y;
+				// winding direction of vertices aligns with light direction
+				glm::vec3 vertices[4];
+				vertices[0] = center + half_dim_x + half_dim_y; // top right, looking down light direction
+				vertices[1] = center - half_dim_x + half_dim_y; // top left
+				vertices[2] = center - half_dim_x - half_dim_y; // bottom left
+				vertices[3] = center + half_dim_x - half_dim_y; // bottom right
+
+				light.center = vec3_to_array(center);
+				light.direction = vec3_to_array(basis_z);
+				for (uint32_t v = 0; v < 4; ++v) {
+					light.vertices[v].value = vec3_to_array(vertices[v]);
+				}
+				light.n_vertices = 4;
+
+				//light.planeBasisX = vec3_to_array(glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[0], 0.0f))));
+				//light.planeBasisY = vec3_to_array(glm::vec3(glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[1], 0.0f))));
+				//light.halfDims = vec2_to_array(lm.half_dims);
 				light.influenceDistance = lm.influence_radius;
 				
 				f_bo.lights->set(i, light);
@@ -168,9 +191,13 @@ void SceneManager::update(uint32_t frame_id) {
 		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, center), &c);
 		glm::vec3 dir = snm.world_transform * glm::vec4(lm.direction, 0.0f);
 		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, direction), &dir);
-		glm::vec3 basis_x = glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[0], 0.0f));
-		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, planeBasisX), &basis_x);
-		glm::vec3 basis_y = glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[1], 0.0f));
-		f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, planeBasisY), &basis_y);
+		
+		if (lm.type == LightMeta::Type::Area) {
+			// assert(false); // update area light parameters accordingly
+		}
+		// glm::vec3 basis_x = glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[0], 0.0f));
+		// f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, planeBasisX), &basis_x);
+		// glm::vec3 basis_y = glm::normalize(snm.world_transform * glm::vec4(lm.plane_base[1], 0.0f));
+		// f_bo.lights->set(i, FIELD_RANGE(LightingFrag::LightBuffer::Element, planeBasisY), &basis_y);
 	}
 }
