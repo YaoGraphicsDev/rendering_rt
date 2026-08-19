@@ -42,7 +42,7 @@ struct IrradianceFieldParams {
     static constexpr VkFormat depth_atlas_format = VK_FORMAT_R16G16_SFLOAT;
 };
 
-int main() {
+int main(int argc, char* argv[]) {
     const uint32_t startup_window_width = 960;
     const uint32_t startup_window_height = 480;
     std::shared_ptr<PerspectiveCamera> cam = std::make_shared<PerspectiveCamera>(
@@ -100,9 +100,17 @@ int main() {
     std::shared_ptr<SceneManager> scene_mgr = std::make_shared<SceneManager>();
     std::shared_ptr<MeshManager> mesh_mgr = std::make_shared<MeshManager>();
     std::shared_ptr<MaterialManager> mat_mgr = std::make_shared<MaterialManager>();
+
+    if (argc != 2) {
+        std::cout << "parameters: gltf file name" << std::endl;
+        assert(false);
+        exit(1);
+    }
+
+    std::string gltf_path = argv[1];
+
     if (!load_gltf(
-        "C:/Users/Yao/models/ddgi_test/gltf/probes_test.gltf",
-        // "C:/Users/Yao/models/sponza_lit/sponza_lit.gltf",
+        gltf_path,
         scene_mgr,
         mat_mgr,
         mesh_mgr)) {
