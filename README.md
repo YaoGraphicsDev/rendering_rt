@@ -48,4 +48,3 @@ Light clustering is done in view space. A quartic falloff is applied to clamp in
 ## Indirect Draw and Scene Culling
 Render queue and material pipelines
 
-## Shader Uniform Reflection
