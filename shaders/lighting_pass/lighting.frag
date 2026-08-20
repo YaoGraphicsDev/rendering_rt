@@ -171,37 +171,31 @@ vec3 findTangent(vec3 n, vec3 v) {
     return t;
 }
 
-vec3 ltcEvaluate(vec3 n, vec3 v, vec3 p, mat3 invM, vec3 light_verts[MAX_AREA_LIGHT_VERTICES_COUNT], uint n_vertices) {
+vec3 ltcEvaluate(vec3 n, vec3 v, vec3 p, mat3 invM, uint lightId /*vec3 light_verts[MAX_AREA_LIGHT_VERTICES_COUNT], uint n_vertices*/) {
     vec3 t1 = findTangent(n, v);
     vec3 t2 = cross(n, t1);
     invM = invM * transpose(mat3(t1, t2, n)); // includes a world space -> fragment local space transform
 
     vec3 formFactorVec = vec3(0.0f);
-    
-    vec3 light_dir = light_verts[0] - p;
-    vec3 light_normal = cross(light_verts[1] - light_verts[0], light_verts[n_vertices - 1] - light_verts[0]);
-    bool behind = (dot(light_dir, light_normal) >= 0.0);
 
-    if (behind) {
-        return vec3(0.0f);
-    }
-
+    vec3 lightVerts[MAX_AREA_LIGHT_VERTICES_COUNT];
+    uint nVertices = lights[lightId].n_vertices;
     // conceptually, these for loops, if-else will not break wavefronts
     for (uint v = 0; v < MAX_AREA_LIGHT_VERTICES_COUNT; ++v) {
-        if (v >= n_vertices) {
+        if (v >= nVertices) {
             break;
         }
-        light_verts[v] = normalize(invM * (light_verts[v] - p));
+        lightVerts[v] = normalize(invM * (lights[lightId].vertices[v] - p));
     }
 
     for (uint v = 0; v < MAX_AREA_LIGHT_VERTICES_COUNT; ++v) {
-        if (v >= n_vertices) {
+        if (v >= nVertices) {
             break;
         }
-        if (v == n_vertices - 1) { // last light vertex
-            formFactorVec += integrateEdgeVec(light_verts[n_vertices - 1], light_verts[0]);
+        if (v == nVertices - 1) { // last light vertex
+            formFactorVec += integrateEdgeVec(lightVerts[nVertices - 1], lightVerts[0]);
         } else {
-            formFactorVec += integrateEdgeVec(light_verts[v], light_verts[v + 1]);
+            formFactorVec += integrateEdgeVec(lightVerts[v], lightVerts[v + 1]);
         }
     }
 
@@ -523,6 +517,9 @@ float cubeShadowFactor(vec4 worldSpaceCoord, Light light, vec3 normal) {
     */
 }
 
+const float shadowThreshold = 0.001;
+
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     // world position
@@ -569,11 +566,15 @@ void main() {
             vec3 F = F(h, l, F0);
             vec3 BRDFSpec = F * BRDFGeometry(viewDir, l, h, normal, alphaRoughness);
             vec3 BRDFDiff = (1.0 - metallic)  * (vec3(1.0) - F) * albedo * invPI;
-            float d = dl / light.influenceDistance;
             float attenuation = squareFalloffAttenuation(dl2, 1.0 / light.influenceDistance);
             vec3 radiance = light.intensity * light.color * attenuation;
-            float shadow = cubeShadowFactor(worldSpaceCoord, light, normal);
-            litColor += (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f) * shadow;
+            vec3 unshadowed = (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f);
+            float importance = max(unshadowed.r, max(unshadowed.g, unshadowed.b));
+            float shadow = 1.0;
+            if (importance > shadowThreshold) {
+                shadow = cubeShadowFactor(worldSpaceCoord, light, normal);
+            }
+            litColor += unshadowed * shadow;
         } else if (light.type == LIGHT_TYPE_DIR) {
             vec3 l = -normalize(light.direction);
             vec3 h = normalize(viewDir + l);
@@ -583,10 +584,19 @@ void main() {
             vec3 BRDFSpec = F * BRDFGeometry(viewDir, l, h, normal, alphaRoughness);
             vec3 BRDFDiff = (1.0 - metallic)  * (vec3(1.0) - F) * albedo * invPI;
             vec3 radiance = light.intensity * light.color;
-            float shadow = cascadedShadowFactor(viewSpaceCoord.z, worldSpaceCoord, normal, light.direction);
-            litColor += (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f) * shadow;
+            vec3 unshadowed = (BRDFSpec + BRDFDiff) * radiance * clamp(dot(l, normal), 0.0f, 1.0f);
+            float importance = max(unshadowed.r, max(unshadowed.g, unshadowed.b));
+            float shadow = 1.0;
+            if (importance > shadowThreshold) {
+                shadow = cascadedShadowFactor(viewSpaceCoord.z, worldSpaceCoord, normal, light.direction);
+            }
+            litColor += unshadowed * shadow;
         } else if (light.type == LIGHT_TYPE_AREA) {
             vec3 l = light.center - worldSpaceCoord.xyz;
+            if (dot(l, light.direction) >= 0.0) {
+                // behind light
+                continue;
+            }
             float dl2 = dot(l, l); // light distance ^ 2
             if (dl2 > light.influenceDistance * light.influenceDistance) {
                 continue;
@@ -609,15 +619,20 @@ void main() {
             F0 = mix(F0, albedo, metallic);
             vec3 fresnel = F0 * nD + (1 - F0) * fD; // specular proportion of reflected light
             // specular term
-            vec3 spec = ltcEvaluate(normal, viewDir, worldSpaceCoord.xyz, invM, light.vertices, light.n_vertices);
+            vec3 spec = ltcEvaluate(normal, viewDir, worldSpaceCoord.xyz, invM, lightId);
             spec *= fresnel;
             // diffuse term
-            vec3 diff = ltcEvaluate(normal, viewDir, worldSpaceCoord.xyz, mat3(1.0f), light.vertices, light.n_vertices);
+            vec3 diff = ltcEvaluate(normal, viewDir, worldSpaceCoord.xyz, mat3(1.0f), lightId);
             diff *= (vec3(1.0f) - fresnel) * (1.0f - metallic) * albedo; // TODO: not correct. Try approximate with (1.0f - metallic) * albedo
             float attenuation = squareFalloffAttenuation(dl2, 1.0 / light.influenceDistance);
             vec3 radiance = light.intensity * light.color * attenuation;
-            float shadow = cubeShadowFactor(worldSpaceCoord, light, normal);
-            litColor += radiance * (spec + diff) * shadow;
+            vec3 unshadowed = radiance * (spec + diff);
+            float importance = max(unshadowed.r, max(unshadowed.g, unshadowed.b));
+            float shadow = 1.0;
+            if (importance > shadowThreshold) {
+                shadow = cubeShadowFactor(worldSpaceCoord, light, normal);
+            }
+            litColor += unshadowed * shadow;
         }
     }
     
