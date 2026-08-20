@@ -16,9 +16,16 @@ SceneAcceleration::SceneAcceleration(
 	for (PerFrameAccObjects& frame : _per_frame_objs) {
 		std::vector<TraceOneBounceComp::InstanceInfo> inst_infos;
 		std::vector<TraceOneBounceComp::GeometryInfo> geo_infos;
+		std::vector<uint32_t> blas_node_indices;
 
 		// BLASes, one for each scene node
-		for (SceneNodeMeta& node : scene_mgr->_node_metas) {
+		for (uint32_t node_index = 0; node_index < scene_mgr->_node_metas.size(); ++node_index) {
+			SceneNodeMeta& node = scene_mgr->_node_metas[node_index];
+			// Scene graph nodes used only for hierarchy/transforms do not produce a BLAS.
+			if (node.renderables.empty()) {
+				continue;
+			}
+
 			AccelerationStructureBuilder blas_builder;
 			blas_builder
 				.level(AccelerationStructureBuilder::Level::Bottom)
@@ -73,6 +80,7 @@ SceneAcceleration::SceneAcceleration(
 			}
 
 			frame.blases.push_back(std::make_shared<AccelerationStructure>(blas_builder));
+			blas_node_indices.push_back(node_index);
 		}
 
 		frame.insts.reset(new SSBO<TraceOneBounceComp::InstanceInfoBuffer>(inst_infos.size()));
@@ -87,11 +95,13 @@ SceneAcceleration::SceneAcceleration(
 			.prefer(AccelerationStructureBuilder::Preference::FastTrace)
 			.allow_update();
 		auto& tlas_geometry = tlas_builder.instance_geometry();
-		for (uint32_t n = 0; n < scene_mgr->_node_metas.size(); ++n) {
+		for (uint32_t n = 0; n < frame.blases.size(); ++n) {
+			const uint32_t node_index = blas_node_indices[n];
 			tlas_geometry
 				.add_instance()
-				.transform(glm::value_ptr(glm::transpose(scene_mgr->_node_metas.at(n).world_transform)))
+				.transform(glm::value_ptr(glm::transpose(scene_mgr->_node_metas.at(node_index).world_transform)))
 				.blas(frame.blases.at(n).get())
+				.custom_index(n)
 				.culling(false) // probes may go inside of geometry, also for double-sided geometries
 				.end();
 		}
